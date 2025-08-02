@@ -26,7 +26,7 @@ SECRET_KEY = 'django-insecure-yj&f5%z8$z)y7*kfmy&!n!t!)sb-k)%))!fty-v@)#94(x2=f*
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'testserver']
 
 MPS_SAMPLE_DATA_PATH = os.path.join(BASE_DIR, "data", "mps_samples")
 
@@ -42,15 +42,20 @@ INSTALLED_APPS = [
 
     # Third party
     'rest_framework',
+    'django_filters',
+    'channels',
 
     # Local apps
     'aria_sessions',
     'devices',
-    'streams',
+    'aria_streams',
+    'webcam_streams',
+    'smartwatch_streams',
     'mps',
     'storage',
     'analytics',
     'datasets',
+    # 'vision', # Removed - AI processing disabled
 
 
 ]
@@ -90,6 +95,32 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'ARD.wsgi.application'
+ASGI_APPLICATION = 'ARD.asgi.application'
+
+# Redis Configuration
+REDIS_HOST = os.getenv('REDIS_HOST', '127.0.0.1')
+REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
+REDIS_DB = int(os.getenv('REDIS_DB', 0))
+
+# Channel Layer Configuration for WebSocket (using in-memory for now)
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels.layers.InMemoryChannelLayer',
+    },
+}
+
+# Cache Configuration (using local memory instead of Redis)
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'ard-cache',
+        'OPTIONS': {
+            'MAX_ENTRIES': 1000,
+        },
+        'KEY_PREFIX': 'ard_cache',
+        'TIMEOUT': 300,  # 5 minutes default timeout
+    }
+}
 
 
 # Database
@@ -97,8 +128,12 @@ WSGI_APPLICATION = 'ARD.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': os.getenv('DB_ENGINE', 'django.db.backends.sqlite3'),
+        'NAME': os.getenv('DB_NAME', BASE_DIR / 'db.sqlite3'),
+        'USER': os.getenv('DB_USER', ''),
+        'PASSWORD': os.getenv('DB_PASSWORD', ''),
+        'HOST': os.getenv('DB_HOST', ''),
+        'PORT': os.getenv('DB_PORT', ''),
     }
 }
 
@@ -138,6 +173,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field

@@ -1,53 +1,73 @@
-version: '3.8'
+name: ARD
 
 services:
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.4.0
-    hostname: zookeeper
-    container_name: ard-zookeeper
+  # Django ARD API 서비스
+  backend:
+    image: ard-api:v14
+    container_name: ARD-BACKEND
     ports:
-      - "2181:2181"
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
+      - "8000:8000"
     volumes:
-      - zookeeper-data:/var/lib/zookeeper/data
-
-  kafka:
-    image: confluentinc/cp-kafka:7.4.0
-    hostname: kafka
-    container_name: ard-kafka
-    depends_on:
-      - zookeeper
-    ports:
-      - "9092:9092"
-      - "19092:19092"
+      # 실제 MPS 샘플 데이터 영구 저장
+      - ard_data:/app/ARD/data
+      # PostgreSQL 데이터와 동기화
+      - ard_logs:/app/logs
     environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-      KAFKA_JMX_PORT: 19092
-      KAFKA_JMX_HOSTNAME: localhost
+      - DEBUG=1
+      - ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0,backend
+      # PostgreSQL 설정
+      - DB_ENGINE=django.db.backends.postgresql
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=ard_db
+      - DB_USER=postgres
+      - DB_PASSWORD=password
+      # Kafka 설정 (새 Kafka 컨테이너 연결)
+      - KAFKA_BOOTSTRAP_SERVERS=ARD_KAFKA:9092
+      - KAFKA_GROUP_ID=ard-consumer-group
+    extra_hosts:
+      # Docker 외부의 서비스들에 접근 (Kafka, PostgreSQL 등)
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - postgres
+    networks:
+      - ard-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/aria/sessions/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # PostgreSQL 데이터베이스
+  postgres:
+    image: postgres:15-alpine
+    container_name: ARD-POSTGRES
+    environment:
+      POSTGRES_DB: ard_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
     volumes:
-      - kafka-data:/var/lib/kafka/data
-
-  kafka-ui:
-    image: provectuslabs/kafka-ui:latest
-    container_name: ard-kafka-ui
-    depends_on:
-      - kafka
+      - postgres_data:/var/lib/postgresql/data
     ports:
-      - "8080:8080"
-    environment:
-      KAFKA_CLUSTERS_0_NAME: local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
-      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+      - "5432:5432"
+    networks:
+      - ard-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+
 
 volumes:
-  zookeeper-data:
-  kafka-data:
+  postgres_data:
+  ard_data:
+  ard_logs:
+
+networks:
+  ard-network:
+    driver: bridge

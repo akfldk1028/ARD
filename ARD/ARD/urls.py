@@ -15,8 +15,21 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
-from django.urls import path
+from django.urls import path, include
+from direct_image_view import DirectImageView, VRSImageView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    
+    # 직접 이미지 보기 - 가장 간단한 방법
+    path('image/', DirectImageView.as_view(), name='direct-image'),
+    path('vrs-image/', VRSImageView.as_view(), name='vrs-image'),
+    
+    # API v1 endpoints
+    path('api/v1/aria/', include('aria_streams.urls')),
+    path('api/v1/webcam/', include('webcam_streams.urls')),
+    path('api/v1/smartwatch/', include('smartwatch_streams.urls')),
+    
+    # Deprecated - redirect to v1
+    path('api/aria/', include('aria_streams.urls')),
 ]
