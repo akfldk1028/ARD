@@ -42,7 +42,7 @@ EXPOSE 8000
 
 # 헬스체크 추가
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8000/api/streams/api/sessions/ || exit 1
+    CMD curl -f http://localhost:8000/api/v1/aria/api/sessions/ || exit 1
 
 # 시작 스크립트 생성
 COPY docker-entrypoint.sh /app/

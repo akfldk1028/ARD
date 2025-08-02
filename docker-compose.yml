@@ -1,16 +1,60 @@
 name: ARD
 
 services:
+  # PostgreSQL 데이터베이스
+  postgres:
+    image: postgres:15
+    container_name: ARD-POSTGRES
+    environment:
+      - POSTGRES_DB=ard_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - ard-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Kafka 브로커 (KRaft 모드)
+  kafka:
+    image: bitnami/kafka:latest
+    container_name: ARD_KAFKA
+    environment:
+      - KAFKA_ENABLE_KRAFT=yes
+      - KAFKA_CFG_PROCESS_ROLES=broker,controller
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://ARD_KAFKA:9092
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@ARD_KAFKA:9093
+      - KAFKA_CFG_NODE_ID=1
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_CFG_LOG_RETENTION_HOURS=24
+      - KAFKA_CFG_LOG_RETENTION_BYTES=1073741824
+      - ALLOW_PLAINTEXT_LISTENER=yes
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafka_data:/bitnami/kafka
+    networks:
+      - ard-network
+    restart: unless-stopped
+
   # Django ARD API 서비스
   backend:
-    image: ard-api:v14
+    image: ard-backend:v15-auto-data
     container_name: ARD-BACKEND
     ports:
       - "8000:8000"
     volumes:
-      # 실제 MPS 샘플 데이터 영구 저장
       - ard_data:/app/ARD/data
-      # PostgreSQL 데이터와 동기화
       - ard_logs:/app/logs
     environment:
       - DEBUG=1
@@ -22,49 +66,25 @@ services:
       - DB_NAME=ard_db
       - DB_USER=postgres
       - DB_PASSWORD=password
-      # Kafka 설정 (새 Kafka 컨테이너 연결)
+      # Kafka 설정
       - KAFKA_BOOTSTRAP_SERVERS=ARD_KAFKA:9092
       - KAFKA_GROUP_ID=ard-consumer-group
-    extra_hosts:
-      # Docker 외부의 서비스들에 접근 (Kafka, PostgreSQL 등)
-      - "host.docker.internal:host-gateway"
     depends_on:
       - postgres
+      - kafka
     networks:
       - ard-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/aria/sessions/"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/aria/api/sessions/"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
-
-  # PostgreSQL 데이터베이스
-  postgres:
-    image: postgres:15-alpine
-    container_name: ARD-POSTGRES
-    environment:
-      POSTGRES_DB: ard_db
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    networks:
-      - ard-network
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-
+      start_period: 60s
 
 volumes:
   postgres_data:
+  kafka_data:
   ard_data:
   ard_logs:
 

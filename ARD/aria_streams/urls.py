@@ -62,8 +62,6 @@ urlpatterns = [
     # Direct MPS import (Kafka bypass)
     path('import-mps/', views.DirectMPSImportView.as_view(), name='direct_mps_import'),
     
-    # DRF browsing interface
-    path('api-auth/', include('rest_framework.urls')),
     
     # === Legacy 함수 기반 API (사용 중단 예정) ===
     # NOTE: 새로운 개발은 /api/ 경로의 클래스 기반 API를 사용하세요

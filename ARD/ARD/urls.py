@@ -30,6 +30,6 @@ urlpatterns = [
     path('api/v1/webcam/', include('webcam_streams.urls')),
     path('api/v1/smartwatch/', include('smartwatch_streams.urls')),
     
-    # Deprecated - redirect to v1
-    path('api/aria/', include('aria_streams.urls')),
+    # DRF browsable API (unified)
+    path('api-auth/', include('rest_framework.urls')),
 ]

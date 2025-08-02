@@ -4,7 +4,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import raw_views
 
-app_name = 'raw_streams'
+app_name = 'raw'
 
 # Raw 데이터 전용 Router 설정 (MPS 원본 데이터)
 raw_router = DefaultRouter()
@@ -20,9 +20,6 @@ urlpatterns = [
     
     # Raw 데이터 통합 통계
     path('statistics/', raw_views.RawDataStatsView.as_view(), name='raw-data-stats'),
-    
-    # DRF 브라우징 인터페이스
-    path('api-auth/', include('rest_framework.urls')),
 ]
 
 """

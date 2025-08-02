@@ -46,7 +46,11 @@ cd /app/ARD && python manage.py migrate --no-input
 echo "Collecting static files..."
 cd /app/ARD && python manage.py collectstatic --no-input || true
 
-echo "📥 Sample data download and loading skipped - run manually after container starts"
+echo "📥 Downloading MPS sample data..."
+cd /app/ARD && python manage.py download_sample_data || echo "⚠️ Sample data download failed - continuing without sample data"
+
+echo "📊 Loading sample data into database..."
+cd /app/ARD && python manage.py load_real_sample_data --data-path data/mps_samples || echo "⚠️ Sample data loading failed - check if data exists"
 
 echo "Django setup completed successfully!"
 
