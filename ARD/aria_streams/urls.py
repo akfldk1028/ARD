@@ -51,9 +51,16 @@ urlpatterns = [
     # Direct image viewing (최단 경로)
     path('direct-image/', views.DirectImageView.as_view(), name='direct-image'),
     
+    # Image metadata and individual image viewing
+    path('image-list/', views.ImageMetadataListView.as_view(), name='image-list'),
+    path('image-by-id/<str:frame_id>/', views.ImageByIdView.as_view(), name='image-by-id'),
+    
     # Original streaming control (Base64 legacy - for compatibility)
     path('streaming/', views.StreamingControlView.as_view(), name='streaming_control'),
     path('test-message/', views.TestMessageView.as_view(), name='test_message'),
+    
+    # Direct MPS import (Kafka bypass)
+    path('import-mps/', views.DirectMPSImportView.as_view(), name='direct_mps_import'),
     
     # DRF browsing interface
     path('api-auth/', include('rest_framework.urls')),

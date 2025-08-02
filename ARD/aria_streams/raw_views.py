@@ -10,6 +10,8 @@ from django.utils import timezone
 from django.db.models import Q, Count, Avg, Max, Min, Sum
 from datetime import datetime, timedelta
 import logging
+import pandas as pd
+import uuid
 
 from .raw_models import RawEyeGazeData, RawHandTrackingData, RawSlamTrajectoryData
 from .models import AriaSession

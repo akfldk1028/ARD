@@ -46,6 +46,8 @@ class AriaSessionSerializer(serializers.ModelSerializer):
 
 class VRSStreamSerializer(serializers.ModelSerializer):
     session_info = serializers.SerializerMethodField()
+    image_url = serializers.SerializerMethodField()
+    kafka_frame_id = serializers.SerializerMethodField()
     
     class Meta:
         model = VRSStream
@@ -55,7 +57,9 @@ class VRSStreamSerializer(serializers.ModelSerializer):
             'pixel_format', 'kafka_offset', 'session_info',
             # 실제 이미지 데이터 필드들 추가
             'image_data', 'image_width', 'image_height',
-            'original_size_bytes', 'compressed_size_bytes', 'compression_quality'
+            'original_size_bytes', 'compressed_size_bytes', 'compression_quality',
+            # 바이너리 이미지 연결 필드들
+            'image_url', 'kafka_frame_id'
         ]
         read_only_fields = ['timestamp']
     
@@ -65,6 +69,53 @@ class VRSStreamSerializer(serializers.ModelSerializer):
             'session_id': obj.session.session_id,
             'device_serial': obj.session.device_serial
         }
+    
+    def get_kafka_frame_id(self, obj):
+        """실제 Kafka Frame ID 찾기 (실시간 매칭)"""
+        from kafka import KafkaConsumer
+        import json
+        import os
+        
+        session_id = obj.session.session_id
+        capture_timestamp = obj.device_timestamp_ns
+        frame_index = obj.frame_index
+        
+        try:
+            # Kafka에서 실제 Frame ID 찾기
+            bootstrap_servers = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'ARD_KAFKA:9092')
+            consumer = KafkaConsumer(
+                'vrs-metadata-stream',
+                bootstrap_servers=bootstrap_servers,
+                consumer_timeout_ms=2000,
+                auto_offset_reset='earliest',
+                value_deserializer=lambda m: json.loads(m.decode('utf-8'))
+            )
+            
+            # 세션과 타임스탬프로 매칭되는 실제 Frame ID 찾기
+            for message in consumer:
+                metadata = message.value
+                if (metadata.get('session_id') == session_id and 
+                    metadata.get('data_type') == 'vrs_frame_binary'):
+                    
+                    # 타임스탬프 또는 프레임 인덱스로 매칭
+                    if (metadata.get('capture_timestamp_ns') == capture_timestamp or
+                        metadata.get('frame_index') == frame_index):
+                        consumer.close()
+                        return metadata.get('frame_id')
+            
+            consumer.close()
+            
+        except Exception:
+            # 오류 시 fallback
+            pass
+        
+        # Fallback: 예상 Frame ID 생성
+        return f"{session_id}_{obj.stream_id}_{frame_index}_{capture_timestamp}"
+    
+    def get_image_url(self, obj):
+        """바이너리 이미지 URL 생성"""
+        frame_id = self.get_kafka_frame_id(obj)
+        return f"/api/v1/aria/image-by-id/{frame_id}/"
 
 
 class IMUDataSerializer(serializers.ModelSerializer):

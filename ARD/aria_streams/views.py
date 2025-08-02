@@ -19,6 +19,7 @@ from .models import (
     SLAMPointCloud, AnalyticsResult, KafkaConsumerStatus,
     IMUData
 )
+from .raw_models import RawEyeGazeData, RawHandTrackingData, RawSlamTrajectoryData
 from .serializers import (
     AriaSessionSerializer, VRSStreamSerializer, EyeGazeDataSerializer,
     HandTrackingDataSerializer, SLAMTrajectoryDataSerializer,
@@ -31,6 +32,8 @@ from .producers import AriaKafkaProducer
 from .vrs_reader import VRSKafkaStreamer
 from kafka import KafkaConsumer
 import base64
+import uuid
+from projectaria_tools.core import mps
 
 logger = logging.getLogger(__name__)
 
@@ -455,6 +458,7 @@ class StreamingControlView(APIView):
     스트리밍 제어 통합 View
     - VRS/MPS 스트리밍 시작/중지
     - 스트리밍 상태 조회
+    - 직접 DB 저장 (Kafka 우회)
     """
     
     def get(self, request):
@@ -548,6 +552,252 @@ class StreamingControlView(APIView):
             'message': '스트리밍이 중지되었습니다.',
             'timestamp': datetime.utcnow().isoformat()
         })
+
+
+class DirectMPSImportView(APIView):
+    """
+    MPS 데이터 직접 임포트 View (Kafka 우회)
+    - Eye Gaze, Hand Tracking, SLAM 데이터를 Django DB에 직접 저장
+    - Kafka 연결 문제 해결용
+    """
+    
+    def post(self, request):
+        """MPS 데이터 직접 임포트 실행"""
+        try:
+            # 1. 기존 MPS 세션 삭제
+            deleted_count = AriaSession.objects.filter(session_id__contains='mps').delete()
+            
+            # 2. 새 세션 생성
+            session = AriaSession.objects.create(
+                session_id='mps-direct-view',
+                session_uid=uuid.uuid4(),
+                device_serial='aria-view-device',
+                status='COMPLETED',
+                metadata={
+                    'source': 'views_direct_import',
+                    'method': 'DirectMPSImportView',
+                    'bypass_kafka': True,
+                    'import_time': datetime.utcnow().isoformat()
+                }
+            )
+            
+            # 3. Eye Gaze 데이터 임포트 (일반 + Raw)
+            eye_gaze_count = self._import_eye_gaze_to_db(session)
+            raw_eye_gaze_count = self._import_raw_eye_gaze_to_db(session)
+            
+            # 4. SLAM 데이터 임포트 (일반 + Raw)
+            slam_count = self._import_slam_to_db(session)
+            raw_slam_count = self._import_raw_slam_to_db(session)
+            
+            return Response({
+                'status': 'success',
+                'message': 'MPS 데이터 직접 임포트 완료',
+                'data': {
+                    'session_id': session.session_id,
+                    'processed_data': {
+                        'eye_gaze_count': eye_gaze_count,
+                        'slam_count': slam_count
+                    },
+                    'raw_data': {
+                        'raw_eye_gaze_count': raw_eye_gaze_count,
+                        'raw_slam_count': raw_slam_count
+                    },
+                    'total_count': eye_gaze_count + slam_count + raw_eye_gaze_count + raw_slam_count,
+                    'deleted_old_sessions': deleted_count[0] if deleted_count else 0
+                },
+                'test_urls': {
+                    'processed_apis': {
+                        'sessions': '/api/v1/aria/api/sessions/',
+                        'eye_gaze': '/api/v1/aria/api/eye-gaze/',
+                        'slam_trajectory': '/api/v1/aria/api/slam-trajectory/'
+                    },
+                    'raw_apis': {
+                        'raw_eye_gaze': '/api/v1/aria/raw/eye-gaze/',
+                        'raw_slam_trajectory': '/api/v1/aria/raw/slam-trajectory/',
+                        'raw_statistics': '/api/v1/aria/raw/statistics/'
+                    }
+                }
+            })
+            
+        except Exception as e:
+            logger.error(f"MPS 직접 임포트 실패: {e}")
+            return Response({
+                'status': 'error',
+                'message': f'MPS 임포트 실패: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    def _import_eye_gaze_to_db(self, session):
+        """Eye Gaze 데이터 직접 DB 저장"""
+        try:
+            count = 0
+            
+            # General Eye Gaze
+            general_path = "/app/ARD/data/mps_samples/eye_gaze/general_eye_gaze.csv"
+            general_gazes = mps.read_eyegaze(general_path)
+            
+            for gaze in general_gazes[::60]:  # 60개마다 1개씩
+                EyeGazeData.objects.create(
+                    session=session,
+                    device_timestamp_ns=int(gaze.tracking_timestamp.total_seconds() * 1e9),
+                    gaze_type='general',
+                    yaw=float(gaze.yaw * 180 / 3.14159),
+                    pitch=float(gaze.pitch * 180 / 3.14159),
+                    depth_m=float(gaze.depth) if gaze.depth else 1.0,
+                    confidence=0.95
+                )
+                count += 1
+                if count >= 25:
+                    break
+            
+            # Personalized Eye Gaze
+            personalized_path = "/app/ARD/data/mps_samples/eye_gaze/personalized_eye_gaze.csv"
+            personalized_gazes = mps.read_eyegaze(personalized_path)
+            
+            for gaze in personalized_gazes[::80]:  # 80개마다 1개씩
+                EyeGazeData.objects.create(
+                    session=session,
+                    device_timestamp_ns=int(gaze.tracking_timestamp.total_seconds() * 1e9),
+                    gaze_type='personalized',
+                    yaw=float(gaze.yaw * 180 / 3.14159),
+                    pitch=float(gaze.pitch * 180 / 3.14159),
+                    depth_m=float(gaze.depth) if gaze.depth else 1.0,
+                    confidence=0.98
+                )
+                count += 1
+                if count >= 40:
+                    break
+            
+            return count
+            
+        except Exception as e:
+            logger.error(f"Eye Gaze 직접 저장 실패: {e}")
+            return 0
+    
+    def _import_slam_to_db(self, session):
+        """SLAM 데이터 직접 DB 저장"""
+        try:
+            slam_path = "/app/ARD/data/mps_samples/slam/closed_loop_trajectory.csv"
+            slam_poses = mps.read_closed_loop_trajectory(slam_path)
+            
+            count = 0
+            for pose in slam_poses[::1200]:  # 1200개마다 1개씩
+                try:
+                    # SE3 변환 추출
+                    transform = pose.transform_world_device
+                    translation = transform.translation()
+                    
+                    # 간단한 변환 행렬 (회전은 단위행렬로 근사)
+                    transform_matrix = [
+                        [1.0, 0.0, 0.0, float(translation[0])],
+                        [0.0, 1.0, 0.0, float(translation[1])],
+                        [0.0, 0.0, 1.0, float(translation[2])],
+                        [0.0, 0.0, 0.0, 1.0]
+                    ]
+                    
+                    SLAMTrajectoryData.objects.create(
+                        session=session,
+                        device_timestamp_ns=int(pose.tracking_timestamp.total_seconds() * 1e9),
+                        transform_matrix=transform_matrix,
+                        position_x=float(translation[0]),
+                        position_y=float(translation[1]),
+                        position_z=float(translation[2])
+                    )
+                    count += 1
+                    if count >= 40:
+                        break
+                        
+                except Exception as e:
+                    continue  # 개별 항목 실패 시 스킵
+            
+            return count
+            
+        except Exception as e:
+            logger.error(f"SLAM 직접 저장 실패: {e}")
+            return 0
+    
+    def _import_raw_eye_gaze_to_db(self, session):
+        """Raw Eye Gaze 데이터 직접 DB 저장 (원본 CSV 필드)"""
+        try:
+            # 기존 Raw 데이터 삭제
+            RawEyeGazeData.objects.filter(session__session_id__contains='mps').delete()
+            
+            count = 0
+            
+            # General Eye Gaze Raw 데이터
+            general_path = "/app/ARD/data/mps_samples/eye_gaze/general_eye_gaze.csv"
+            import pandas as pd
+            df = pd.read_csv(general_path)
+            
+            for idx, row in df.head(30).iterrows():  # 30개만
+                try:
+                    RawEyeGazeData.objects.create(
+                        session=session,
+                        tracking_timestamp_us=int(row['tracking_timestamp_us']),
+                        left_yaw_rads_cpf=float(row['left_yaw_rads_cpf']),
+                        right_yaw_rads_cpf=float(row['right_yaw_rads_cpf']),
+                        pitch_rads_cpf=float(row['pitch_rads_cpf']),
+                        depth_m=float(row['depth_m']),
+                        left_yaw_low_rads_cpf=float(row['left_yaw_low_rads_cpf']),
+                        right_yaw_low_rads_cpf=float(row['right_yaw_low_rads_cpf']),
+                        pitch_low_rads_cpf=float(row['pitch_low_rads_cpf']),
+                        left_yaw_high_rads_cpf=float(row['left_yaw_high_rads_cpf']),
+                        right_yaw_high_rads_cpf=float(row['right_yaw_high_rads_cpf']),
+                        pitch_high_rads_cpf=float(row['pitch_high_rads_cpf']),
+                        tx_left_eye_cpf=float(row['tx_left_eye_cpf']),
+                        ty_left_eye_cpf=float(row['ty_left_eye_cpf']),
+                        tz_left_eye_cpf=float(row['tz_left_eye_cpf']),
+                        tx_right_eye_cpf=float(row['tx_right_eye_cpf']),
+                        ty_right_eye_cpf=float(row['ty_right_eye_cpf']),
+                        tz_right_eye_cpf=float(row['tz_right_eye_cpf']),
+                        session_uid=row['session_uid'],
+                        data_source='general_eye_gaze_csv'
+                    )
+                    count += 1
+                except Exception as e:
+                    continue  # 개별 행 실패 시 스킵
+            
+            return count
+            
+        except Exception as e:
+            logger.error(f"Raw Eye Gaze 직접 저장 실패: {e}")
+            return 0
+    
+    def _import_raw_slam_to_db(self, session):
+        """Raw SLAM 데이터 직접 DB 저장 (원본 CSV 필드)"""
+        try:
+            # 기존 Raw SLAM 데이터 삭제
+            RawSlamTrajectoryData.objects.filter(session__session_id__contains='mps').delete()
+            
+            count = 0
+            
+            # SLAM Raw 데이터
+            slam_path = "/app/ARD/data/mps_samples/slam/closed_loop_trajectory.csv"
+            import pandas as pd
+            df = pd.read_csv(slam_path)
+            
+            for idx, row in df.head(25).iterrows():  # 25개만
+                try:
+                    RawSlamTrajectoryData.objects.create(
+                        session=session,
+                        tracking_timestamp_ns=int(row['tracking_timestamp_ns']),
+                        tx_world_device=float(row['tx_world_device']),
+                        ty_world_device=float(row['ty_world_device']),
+                        tz_world_device=float(row['tz_world_device']),
+                        qx_world_device=float(row['qx_world_device']),
+                        qy_world_device=float(row['qy_world_device']),
+                        qz_world_device=float(row['qz_world_device']),
+                        qw_world_device=float(row['qw_world_device']),
+                        data_source='closed_loop_trajectory_csv'
+                    )
+                    count += 1
+                except Exception as e:
+                    continue  # 개별 행 실패 시 스킵
+            
+            return count
+            
+        except Exception as e:
+            logger.error(f"Raw SLAM 직접 저장 실패: {e}")
+            return 0
 
 
 class TestMessageView(APIView):
@@ -997,4 +1247,137 @@ class DirectImageView(APIView):
             logger.error(f"Test image generation failed: {e}")
             return Response({
                 'error': f'Test image generation failed: {str(e)}'
+            }, status=500)
+
+
+class ImageMetadataListView(APIView):
+    """이미지 메타데이터 목록 - 클릭하면 이미지 보기"""
+    permission_classes = [permissions.AllowAny]
+    
+    def get(self, request):
+        """Kafka에서 모든 이미지 메타데이터 목록 가져오기"""
+        try:
+            import os
+            from kafka import KafkaConsumer
+            import json
+            from datetime import datetime
+            
+            # Kafka 설정
+            bootstrap_servers = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'ARD_KAFKA:9092')
+            
+            # 메타데이터 토픽에서 모든 이미지 정보 가져오기
+            consumer = KafkaConsumer(
+                'vrs-metadata-stream',
+                bootstrap_servers=bootstrap_servers,
+                consumer_timeout_ms=3000,
+                auto_offset_reset='earliest',
+                value_deserializer=lambda m: json.loads(m.decode('utf-8'))
+            )
+            
+            metadata_list = []
+            
+            for message in consumer:
+                metadata = message.value
+                if metadata.get('data_type') == 'vrs_frame_binary':
+                    # 타임스탬프를 읽기 쉽게 변환
+                    try:
+                        timestamp_iso = metadata.get('timestamp', '')
+                        if timestamp_iso:
+                            dt = datetime.fromisoformat(timestamp_iso.replace('Z', '+00:00'))
+                            readable_time = dt.strftime('%Y-%m-%d %H:%M:%S')
+                        else:
+                            readable_time = 'Unknown'
+                    except:
+                        readable_time = 'Invalid'
+                    
+                    metadata_item = {
+                        'frame_id': metadata.get('frame_id'),
+                        'session_id': metadata.get('session_id'),
+                        'stream_id': metadata.get('stream_id'),
+                        'frame_index': metadata.get('frame_index'),
+                        'image_size': f"{metadata.get('image_width', 0)}x{metadata.get('image_height', 0)}",
+                        'timestamp': readable_time,
+                        'compressed_size': metadata.get('compression', {}).get('compressed_size', 0),
+                        'compression_ratio': round(metadata.get('compression', {}).get('compression_ratio', 0), 3),
+                        'image_url': f'/api/v1/aria/image-by-id/{metadata.get("frame_id")}/',
+                        'is_real_vrs': 'real-vrs-session' in metadata.get('session_id', ''),
+                        'capture_timestamp_ns': metadata.get('capture_timestamp_ns')
+                    }
+                    metadata_list.append(metadata_item)
+            
+            consumer.close()
+            
+            # 타임스탬프 순으로 정렬 (최신 먼저)
+            metadata_list.sort(key=lambda x: x.get('capture_timestamp_ns', 0), reverse=True)
+            
+            return Response({
+                'success': True,
+                'total_images': len(metadata_list),
+                'images': metadata_list,
+                'instructions': {
+                    'how_to_view': 'Click on image_url to view the actual image',
+                    'real_vrs_data': 'Items with is_real_vrs=true are from actual VRS sample.vrs file',
+                    'test_data': 'Items with is_real_vrs=false are generated test images'
+                }
+            })
+            
+        except Exception as e:
+            return Response({
+                'error': f'Failed to get metadata: {str(e)}',
+                'suggestion': 'Make sure Kafka is running with metadata'
+            }, status=500)
+
+
+class ImageByIdView(APIView):
+    """특정 Frame ID로 이미지 가져오기"""
+    permission_classes = [permissions.AllowAny]
+    
+    def get(self, request, frame_id):
+        """Frame ID로 특정 이미지 반환"""
+        try:
+            import os
+            from kafka import KafkaConsumer
+            
+            # Kafka 설정
+            bootstrap_servers = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'ARD_KAFKA:9092')
+            
+            # 바이너리 토픽에서 해당 Frame ID 찾기
+            consumer = KafkaConsumer(
+                'vrs-binary-stream',
+                bootstrap_servers=bootstrap_servers,
+                consumer_timeout_ms=5000,
+                auto_offset_reset='earliest',
+                enable_auto_commit=False
+            )
+            
+            target_image = None
+            
+            logger.info(f"Looking for image with frame_id: {frame_id}")
+            
+            for message in consumer:
+                if message.key and message.key.decode('utf-8') == frame_id:
+                    if message.value and len(message.value) > 1000:
+                        target_image = message.value
+                        logger.info(f"Found target image: {frame_id}, size: {len(target_image)} bytes")
+                        break
+            
+            consumer.close()
+            
+            if target_image:
+                response = HttpResponse(target_image, content_type='image/jpeg')
+                response['Content-Length'] = len(target_image)
+                response['X-Frame-ID'] = frame_id
+                response['Content-Disposition'] = f'inline; filename="{frame_id}.jpg"'
+                response['Cache-Control'] = 'no-cache'
+                return response
+            else:
+                return Response({
+                    'error': f'Image not found for frame_id: {frame_id}',
+                    'suggestion': 'Check if the frame_id exists in the image list'
+                }, status=404)
+                
+        except Exception as e:
+            logger.error(f"Image by ID view failed: {e}")
+            return Response({
+                'error': f'Failed to get image: {str(e)}'
             }, status=500)
