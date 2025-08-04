@@ -56,9 +56,13 @@ echo "Django setup completed successfully!"
 
 echo "Django setup completed successfully! Starting Django server..."
 
-# Kafka Consumer는 Raw 데이터 테이블 생성 후 수동으로 시작
-echo "Kafka Consumer startup skipped - start manually after Raw tables are created"
-# cd /app/ARD && python manage.py start_kafka_consumer --bootstrap-servers ${KAFKA_BOOTSTRAP_SERVERS:-host.docker.internal:9092} &
+# Kafka Consumer 자동 시작 (백그라운드)
+echo "Starting Kafka Consumer in background..."
+cd /app/ARD && python manage.py start_kafka_consumer --bootstrap-servers ${KAFKA_BOOTSTRAP_SERVERS:-ARD_KAFKA:9092} &
+
+# VRS 스트리밍 자동 시작 (선택사항 - 필요시 주석 해제)
+# echo "Starting VRS streaming..."
+# cd /app/ARD && python manage.py stream_vrs_data --vrs-file data/mps_samples/sample.vrs --mps-data-path data/mps_samples --duration 300 --stream-type vrs --kafka-servers ${KAFKA_BOOTSTRAP_SERVERS:-ARD_KAFKA:9092} &
 
 echo "Django server and Kafka consumer starting..."
 
