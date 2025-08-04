@@ -22,8 +22,8 @@ import uuid
 logger = logging.getLogger(__name__)
 
 class AriaKafkaConsumer:
-    def __init__(self, bootstrap_servers=None, consumer_group='aria-django-consumer'):
-        self.bootstrap_servers = bootstrap_servers or os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'kafka-all:9092')
+    def __init__(self, bootstrap_servers=None, consumer_group='aria-django-consumer-v2'):
+        self.bootstrap_servers = bootstrap_servers or os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'ARD_KAFKA:9092')
         self.consumer_group = consumer_group
         self.consumers = {}
         self.is_consuming = False
@@ -37,10 +37,12 @@ class AriaKafkaConsumer:
             'mps-slam-trajectory': self.handle_slam_trajectory,
             'mps-slam-points': self.handle_slam_points,
             'analytics-real-time': self.handle_analytics,
-            # 바이너리 스트리밍 토픽들 추가
-            'vrs-frame-registry': self.handle_binary_registry,
-            'vrs-metadata-stream': self.handle_binary_metadata,
-            'vrs-binary-stream': self.handle_binary_data
+            # VRS Observer → Kafka → API 파이프라인
+            'real-time-frames': self.handle_real_time_vrs_frame,
+            # 바이너리 스트리밍 토픽들 (간소화)
+            'vrs-frame-registry': self.handle_binary_registry_simple,
+            'vrs-metadata-stream': self.handle_binary_metadata_simple,
+            'vrs-binary-stream': self.handle_binary_data_simple
         }
     
     def create_consumer(self, topics: list) -> KafkaConsumer:
@@ -63,7 +65,7 @@ class AriaKafkaConsumer:
             group_id=self.consumer_group,
             value_deserializer=smart_deserializer,
             key_deserializer=lambda k: k.decode('utf-8') if k else None,
-            auto_offset_reset='earliest',
+            auto_offset_reset='latest',  # Only process new messages
             enable_auto_commit=True,
             auto_commit_interval_ms=1000
         )
@@ -119,8 +121,12 @@ class AriaKafkaConsumer:
         if handler:
             # Check if data is bytes (binary data) or dict (JSON data)
             if isinstance(message.value, bytes) and topic == 'vrs-binary-stream':
-                await handler(message.value, message.offset)
+                logger.info(f"🚀 Processing binary message: topic={topic}, size={len(message.value)}, key={message.key}")
+                # Pass both data, offset, and key for binary messages
+                await handler(message.value, message.offset, message.key)
             elif isinstance(message.value, dict):
+                if topic in ['vrs-frame-registry', 'vrs-metadata-stream']:
+                    logger.debug(f"📄 Processing metadata: topic={topic}, frame_id={message.value.get('frame_id', 'N/A')}")
                 await handler(message.value, message.offset)
             else:
                 logger.warning(f"Unexpected data type for topic {topic}: {type(message.value)}")
@@ -334,26 +340,33 @@ class AriaKafkaConsumer:
     async def handle_binary_registry(self, data: Dict[str, Any], offset: int):
         """Handle binary frame registry entries"""
         try:
-            from .binary_models import BinaryFrameRegistry
+            # Binary models no longer needed - direct VRS streaming
             
-            registry = BinaryFrameRegistry(
-                frame_id=data.get('frame_id'),
-                session_id=data.get('session_id'), 
-                stream_id=data.get('stream_id'),
-                frame_index=data.get('frame_index'),
-                metadata_offset=data.get('metadata_offset'),
-                binary_offset=data.get('binary_offset'),
-                compression_format=data.get('compression_format'),
-                size_bytes=data.get('compressed_size'),
-                compression_ratio=data.get('compression_ratio'),
-                status='PENDING'
+            def _get_or_create_registry():
+                registry, created = BinaryFrameRegistry.objects.get_or_create(
+                    frame_id=data.get('frame_id'),
+                    defaults={
+                        'session_id': data.get('session_id'), 
+                        'stream_id': data.get('stream_id'),
+                        'frame_index': data.get('frame_index'),
+                        'metadata_offset': data.get('metadata_offset'),
+                        'binary_offset': data.get('binary_offset'),
+                        'compression_format': data.get('compression_format'),
+                        'size_bytes': data.get('compressed_size'),
+                        'compression_ratio': data.get('compression_ratio'),
+                        'status': 'PENDING'
+                    }
+                )
+                return registry, created
+            
+            registry, created = await asyncio.get_event_loop().run_in_executor(
+                None, _get_or_create_registry
             )
             
-            await asyncio.get_event_loop().run_in_executor(
-                None, registry.save
-            )
-            
-            logger.debug(f"✅ Binary registry: {data.get('frame_id')}")
+            if created:
+                logger.debug(f"✅ Binary registry created: {data.get('frame_id')}")
+            else:
+                logger.debug(f"📋 Binary registry exists: {data.get('frame_id')}")
             
         except Exception as e:
             logger.error(f"❌ Error handling binary registry: {e}")
@@ -361,7 +374,7 @@ class AriaKafkaConsumer:
     async def handle_binary_metadata(self, data: Dict[str, Any], offset: int):
         """Handle binary frame metadata"""
         try:
-            from .binary_models import BinaryFrameMetadata, BinaryFrameRegistry
+            # Binary models no longer needed
             
             frame_id = data.get('frame_id')
             
@@ -409,15 +422,69 @@ class AriaKafkaConsumer:
         except Exception as e:
             logger.error(f"❌ Error handling binary metadata: {e}")
     
-    async def handle_binary_data(self, data: bytes, offset: int):
-        """Handle raw binary image data"""
+    async def handle_binary_data(self, data: bytes, offset: int, key: str = None):
+        """Handle raw binary image data and link with registry using frame_id from key"""
         try:
-            # 바이너리 데이터는 별도 스토리지에 저장
-            # 현재는 로깅만 수행 (실제 파일 저장은 필요시 구현)
-            logger.debug(f"✅ Binary data received: {len(data)} bytes at offset {offset}")
+            # Binary models no longer needed - direct VRS streaming
+            
+            def _link_binary_data_by_key():
+                frame_id = key if key else None
+                if not frame_id:
+                    logger.warning(f"No frame_id key provided for binary data ({len(data)} bytes)")
+                    return None
+                
+                logger.info(f"🔍 Processing binary data: key={frame_id}, size={len(data)} bytes, offset={offset}")
+                
+                try:
+                    # Find registry entry by exact frame_id match
+                    registry = BinaryFrameRegistry.objects.get(
+                        frame_id=frame_id,
+                        status='PENDING'
+                    )
+                    
+                    logger.info(f"📋 Found registry entry: {registry.id} for {frame_id}")
+                    
+                    # Create binary reference entry
+                    binary_ref = BinaryFrameReference.objects.create(
+                        registry=registry,
+                        frame_id=frame_id,
+                        kafka_topic='vrs-binary-stream',
+                        kafka_offset=offset,
+                        storage_type='KAFKA',
+                        size_bytes=len(data)
+                    )
+                    
+                    # Update registry status to LINKED
+                    registry.binary_offset = offset
+                    registry.status = 'LINKED'
+                    registry.linked_at = timezone.now()
+                    registry.save()
+                    
+                    logger.info(f"✅ Binary data linked: {frame_id} ({len(data)} bytes) -> Registry ID: {registry.id}")
+                    return frame_id
+                    
+                except BinaryFrameRegistry.DoesNotExist:
+                    logger.warning(f"❌ No PENDING registry found for frame_id: {frame_id}")
+                    # Show available PENDING entries for debugging
+                    pending_count = BinaryFrameRegistry.objects.filter(status='PENDING').count()
+                    logger.warning(f"   Available PENDING entries: {pending_count}")
+                    if pending_count > 0:
+                        recent_pending = BinaryFrameRegistry.objects.filter(status='PENDING').order_by('-created_at')[:3]
+                        for rp in recent_pending:
+                            logger.warning(f"   Sample PENDING: {rp.frame_id}")
+                    return None
+                except Exception as e:
+                    logger.error(f"❌ Error linking binary data for {frame_id}: {e}")
+                    import traceback
+                    logger.error(f"Full traceback: {traceback.format_exc()}")
+                    return None
+            
+            frame_id = await asyncio.get_event_loop().run_in_executor(None, _link_binary_data_by_key)
             
         except Exception as e:
             logger.error(f"❌ Error handling binary data: {e}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
     
     async def get_or_create_session(self, data: Dict[str, Any]) -> AriaSession:
         """Get or create Aria session from message data"""
@@ -861,3 +928,65 @@ class VRSImageConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             logger.error(f"Error fetching VRS image: {str(e)}")
             return None
+
+    async def handle_real_time_vrs_frame(self, data: Dict[str, Any], offset: int):
+        """
+        VRS Observer → Kafka → API 파이프라인 핸들러
+        실시간 VRS 이미지+메타데이터 처리 (동기화)
+        """
+        try:
+            # VRS 실시간 프레임 데이터 추출
+            metadata = data.get('metadata', {})
+            image_hex = data.get('image_data', '')
+            
+            if not image_hex:
+                logger.warning("❌ VRS 프레임에 이미지 데이터 없음")
+                return False
+            
+            # Hex string을 bytes로 변환
+            try:
+                image_bytes = bytes.fromhex(image_hex)
+            except ValueError:
+                logger.error("❌ VRS 이미지 데이터 hex 변환 실패")
+                return False
+            
+            # VRS 프레임 정보 로깅
+            frame_id = metadata.get('frame_id', 'unknown')
+            stream_type = metadata.get('stream_type', 'unknown')
+            frame_index = metadata.get('frame_index', 0)
+            image_size = len(image_bytes)
+            
+            logger.info(f"🎬 VRS→Kafka→API: {stream_type} Frame {frame_index} ({image_size} bytes)")
+            
+            # 데이터베이스에 VRS 스트림 저장 (선택적)
+            def _save_vrs_stream():
+                session, _ = AriaSession.objects.get_or_create(
+                    session_id=metadata.get('session_id', 'kafka-vrs-stream'),
+                    defaults={'status': 'active', 'device_type': 'VRS Observer'}
+                )
+                
+                vrs_stream = VRSStream.objects.create(
+                    session=session,
+                    stream_id=metadata.get('stream_id', 'unknown'),
+                    timestamp=timezone.now(),
+                    frame_number=frame_index,
+                    device_timestamp_ns=metadata.get('timestamp_ns', 0),
+                    kafka_offset=offset,
+                    # 추가 VRS 메타데이터
+                    metadata=metadata
+                )
+                return vrs_stream
+            
+            # 데이터베이스 저장 (비동기)
+            vrs_stream = await asyncio.get_event_loop().run_in_executor(
+                None, _save_vrs_stream
+            )
+            
+            logger.debug(f"✅ VRS 스트림 저장 완료: {frame_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ VRS 실시간 프레임 처리 실패: {e}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            return False

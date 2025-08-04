@@ -36,6 +36,17 @@ class Command(BaseCommand):
             default='both',
             help='Type of data to stream'
         )
+        parser.add_argument(
+            '--loop',
+            action='store_true',
+            help='Loop streaming continuously (repeat the VRS file)'
+        )
+        parser.add_argument(
+            '--loop-delay',
+            type=int,
+            default=2,
+            help='Delay between loops in seconds (default: 2)'
+        )
     
     def handle(self, *args, **options):
         vrs_file = options['vrs_file']
@@ -61,20 +72,42 @@ class Command(BaseCommand):
         )
         
         try:
-            # Create tasks based on stream type
-            tasks = []
+            # Loop streaming if requested
+            loop_streaming = options.get('loop', False)
+            loop_delay = options.get('loop_delay', 2)
             
-            if options['stream_type'] in ['vrs', 'both']:
-                tasks.append(streamer.stream_vrs_data(options.get('duration')))
+            if loop_streaming:
+                self.stdout.write('🔄 Loop streaming enabled - will repeat VRS file continuously')
+            
+            async def run_streaming_session():
+                # Create tasks based on stream type
+                tasks = []
                 
-            if options['stream_type'] in ['mps', 'both']:
-                tasks.append(streamer.stream_mps_data(options.get('duration')))
-            
-            # Run streaming tasks
-            async def run_tasks():
+                if options['stream_type'] in ['vrs', 'both']:
+                    tasks.append(streamer.stream_vrs_data(options.get('duration')))
+                    
+                if options['stream_type'] in ['mps', 'both']:
+                    tasks.append(streamer.stream_mps_data(options.get('duration')))
+                
+                # Run streaming tasks
                 await asyncio.gather(*tasks)
             
-            asyncio.run(run_tasks())
+            async def run_with_loop():
+                loop_count = 0
+                while True:
+                    loop_count += 1
+                    if loop_streaming:
+                        self.stdout.write(f'🚀 Starting streaming loop #{loop_count}')
+                    
+                    await run_streaming_session()
+                    
+                    if not loop_streaming:
+                        break
+                        
+                    self.stdout.write(f'✅ Loop #{loop_count} completed. Waiting {loop_delay}s before next loop...')
+                    await asyncio.sleep(loop_delay)
+            
+            asyncio.run(run_with_loop())
             
         except KeyboardInterrupt:
             self.stdout.write('\nStopping data streaming...')

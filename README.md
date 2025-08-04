@@ -89,6 +89,35 @@ docker-compose restart
 docker-compose down
 ```
 
+## 🚀 **Real-Time Aria Streaming**
+
+### **실제 Aria 장비 스트리밍**
+```bash
+# USB 연결
+docker exec ARD-BACKEND python manage.py start_real_aria_stream
+
+# Wi-Fi 연결 
+docker exec ARD-BACKEND python manage.py start_real_aria_stream --streaming-mode wifi --device-ip 192.168.1.100
+
+# 실시간 스트리밍 (10분간)
+docker exec ARD-BACKEND python manage.py start_real_aria_stream --duration 600
+```
+
+### **VRS 시뮬레이션 모드**
+```bash
+# VRS 파일로 시뮬레이션 (실제 장비 없을 때)
+docker exec ARD-BACKEND python manage.py start_real_aria_stream --force-vrs --duration 30 --fps 30
+
+# 커스텀 VRS 파일 사용
+docker exec ARD-BACKEND python manage.py start_real_aria_stream --force-vrs --vrs-file custom_file.vrs
+```
+
+### **기존 스트리밍 (호환성)**
+```bash
+# 기존 방식 (VRS 기반)
+docker exec ARD-BACKEND python manage.py stream_vrs_data --vrs-file data/mps_samples/sample.vrs --loop --duration 60
+```
+
 ## 📚 **API 문서**
 
 - **메인 API**: http://localhost:8000/api/v1/aria/api/
@@ -96,6 +125,12 @@ docker-compose down
 - **바이너리 스트리밍**: http://localhost:8000/api/v1/aria/binary/
 - **Django Admin**: http://localhost:8000/admin/
 
+### **실시간 스트리밍 토픽**
+- `aria-rgb-real-time`: RGB 카메라 (실시간)
+- `aria-slam-real-time`: SLAM 카메라 (실시간)  
+- `aria-et-real-time`: Eye tracking (실시간)
+- `aria-general-real-time`: 기타 센서 데이터
+
 ---
 
-**🎯 한 줄 실행으로 모든 AR 데이터 API가 준비됩니다!**
+**🎯 Project Aria Device Stream API + VRS Fallback = 완벽한 실시간 AR 스트리밍!**

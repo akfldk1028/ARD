@@ -19,7 +19,8 @@ from .models import (
     SLAMPointCloud, AnalyticsResult, KafkaConsumerStatus,
     IMUData
 )
-from .raw_models import RawEyeGazeData, RawHandTrackingData, RawSlamTrajectoryData
+# Raw models moved to deprecated - not needed for clean Kafka pipeline
+# from .raw_models import RawEyeGazeData, RawHandTrackingData, RawSlamTrajectoryData
 from .serializers import (
     AriaSessionSerializer, VRSStreamSerializer, EyeGazeDataSerializer,
     HandTrackingDataSerializer, SLAMTrajectoryDataSerializer,
@@ -29,7 +30,8 @@ from .serializers import (
     IMUDataSerializer
 )
 from .producers import AriaKafkaProducer
-from .vrs_reader import VRSKafkaStreamer
+# VRS reader moved to deprecated - using clean_vrs_kafka instead
+# from .vrs_reader import VRSKafkaStreamer
 from kafka import KafkaConsumer
 import base64
 import uuid
@@ -984,20 +986,7 @@ def api_root(request, format=None):
             'raw-hand-tracking': request.build_absolute_uri('/api/v1/aria/raw/hand-tracking/'),
             'raw-slam-trajectory': request.build_absolute_uri('/api/v1/aria/raw/slam-trajectory/'),
         },
-        
-        '📦 Binary Data APIs (고성능 스트리밍)': {
-            'binary-registry': request.build_absolute_uri('/api/v1/aria/binary/api/registry/'),
-            'binary-metadata': request.build_absolute_uri('/api/v1/aria/binary/api/metadata/'),
-            'binary-streaming': request.build_absolute_uri('/api/v1/aria/binary/streaming/'),
-            'binary-analytics': request.build_absolute_uri('/api/v1/aria/binary/analytics/'),
-        },
-        
-        '🎮 Control APIs (시스템 제어)': {
-            'streaming-control': request.build_absolute_uri('/api/v1/aria/streaming/'),
-            'test-message': request.build_absolute_uri('/api/v1/aria/test-message/'),
-            'binary-test': request.build_absolute_uri('/api/v1/aria/binary/test-message/'),
-        },
-        
+
         '💡 Quick Examples': {
             'processed_eye_gaze': request.build_absolute_uri('/api/v1/aria/eye-gaze/'),
             'raw_eye_gaze_with_all_fields': request.build_absolute_uri('/api/v1/aria/raw/eye-gaze/'),

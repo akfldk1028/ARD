@@ -37,7 +37,7 @@ class BinaryKafkaProducer:
     """
     
     def __init__(self, bootstrap_servers=None):
-        self.bootstrap_servers = bootstrap_servers or os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
+        self.bootstrap_servers = bootstrap_servers or os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'ARD_KAFKA:9092')
         self.producer = None
         
         # Topic configuration
@@ -56,30 +56,30 @@ class BinaryKafkaProducer:
         }
         
     def _get_producer(self) -> KafkaProducer:
-        """Lazy initialization with optimized settings for binary data"""
+        """Lazy initialization with simplified settings for reliability"""
         if self.producer is None:
-            self.producer = KafkaProducer(
-                bootstrap_servers=[self.bootstrap_servers],
-                # Binary data settings
-                value_serializer=None,  # Raw bytes for binary topic
-                key_serializer=lambda k: k.encode('utf-8') if isinstance(k, str) else k,
-                # Performance optimization
-                compression_type=None,  # No compression for compatibility
-                batch_size=32768,          # 32KB batches for efficiency
-                linger_ms=5,               # Small delay for batching
-                buffer_memory=67108864,    # 64MB buffer
-                # Large message support
-                max_request_size=10485760, # 10MB max message
-                # Reliability
-                retries=3,
-                acks=1,
-                request_timeout_ms=30000,
-                metadata_max_age_ms=300000,  # 5 minutes
-                # Connection management
-                connections_max_idle_ms=300000,
-                reconnect_backoff_ms=50,
-                reconnect_backoff_max_ms=1000
-            )
+            try:
+                self.producer = KafkaProducer(
+                    bootstrap_servers=[self.bootstrap_servers],
+                    # Simplified settings for stability
+                    value_serializer=None,  # Raw bytes for binary topic
+                    key_serializer=lambda k: k.encode('utf-8') if isinstance(k, str) else k,
+                    # Basic reliability settings
+                    retries=3,
+                    acks=1,
+                    request_timeout_ms=10000,
+                    api_version=(0, 10),  # Explicit API version
+                    # Connection timeout
+                    connections_max_idle_ms=60000,
+                    reconnect_backoff_ms=100,
+                    max_request_size=5242880,  # 5MB max message
+                    batch_size=16384,  # 16KB batches
+                    linger_ms=10
+                )
+                logger.info(f"✅ Kafka producer connected to {self.bootstrap_servers}")
+            except Exception as e:
+                logger.error(f"❌ Failed to create Kafka producer: {e}")
+                raise
         return self.producer
     
     def generate_frame_id(self, session_id: str, stream_id: str, frame_index: int) -> str:
@@ -287,7 +287,7 @@ class BinaryKafkaProducer:
                 'frame_id': frame_id,
                 'metadata': metadata,
                 'compression': compression_info,
-                'binary_data': binary_data,  # Add binary data for database storage
+                'binary_size': len(binary_data),  # Size instead of raw data
                 'kafka_results': results
             }
             

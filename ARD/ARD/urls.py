@@ -17,6 +17,8 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 from direct_image_view import DirectImageView, VRSImageView
+from aria_streams.real_time_stream_view import RealTimeStreamView
+from aria_streams.kafka_device_stream import KafkaDeviceStreamView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -24,6 +26,12 @@ urlpatterns = [
     # 직접 이미지 보기 - 가장 간단한 방법
     path('image/', DirectImageView.as_view(), name='direct-image'),
     path('vrs-image/', VRSImageView.as_view(), name='vrs-image'),
+    
+    # Project Aria 공식 Device Stream API 기반 실시간 스트리밍
+    path('device-stream/', RealTimeStreamView.as_view(), name='device-stream'),
+    
+    # Project Aria 공식 Device Stream API + Kafka 통합
+    path('kafka-stream/', KafkaDeviceStreamView.as_view(), name='kafka-stream'),
     
     # API v1 endpoints
     path('api/v1/aria/', include('aria_streams.urls')),

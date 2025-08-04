@@ -192,6 +192,48 @@ class AriaKafkaProducer:
             logger.error(f"Failed to send Aria command: {e}")
             raise
     
+    def send_real_time_frame(self, stream_type: str, compressed_data: bytes, metadata: dict) -> bool:
+        """
+        실시간 프레임 데이터 전송 (바이너리 저장 없음)
+        Real-time frame streaming without binary storage
+        """
+        try:
+            # 메타데이터에 스트림 정보 추가
+            frame_metadata = {
+                **metadata,
+                'data_type': 'real_time_frame',
+                'stream_type': stream_type,
+                'frame_size': len(compressed_data)
+            }
+            
+            producer = self._get_producer()
+            
+            # 메타데이터와 압축된 이미지를 하나의 메시지로 전송
+            real_time_message = {
+                'metadata': frame_metadata,
+                'image_data': compressed_data.hex()  # 바이너리를 hex string으로 변환
+            }
+            
+            # 적절한 토픽으로 전송
+            topic_map = {
+                'rgb': 'aria-rgb-real-time',
+                'slam_left': 'aria-slam-real-time', 
+                'slam_right': 'aria-slam-real-time',
+                'eye_tracking': 'aria-et-real-time'
+            }
+            
+            topic = topic_map.get(stream_type, 'aria-general-real-time')
+            
+            future = producer.send(topic, real_time_message)
+            record_metadata = future.get(timeout=10)
+            
+            logger.debug(f"Real-time {stream_type} frame sent: {len(compressed_data)} bytes to {topic}")
+            return True
+            
+        except KafkaError as e:
+            logger.error(f"Failed to send real-time {stream_type} frame: {e}")
+            return False
+
     def send_test_message(self, session_id: str = 'test-aria-session'):
         """Send test VRS frame message for debugging"""
         

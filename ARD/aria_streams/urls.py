@@ -1,7 +1,15 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views
-from . import binary_views
+from . import real_time_stream_view
+from . import clean_vrs_kafka
+from . import kafka_device_stream
+
+try:
+    from . import unity_views
+    UNITY_VIEWS_AVAILABLE = True
+except ImportError:
+    UNITY_VIEWS_AVAILABLE = False
 
 app_name = 'streams'
 
@@ -15,11 +23,6 @@ router.register(r'hand-tracking', views.HandTrackingDataViewSet)
 router.register(r'slam-trajectory', views.SLAMTrajectoryDataViewSet)
 router.register(r'kafka-status', views.KafkaConsumerStatusViewSet)
 
-# Binary API router
-binary_router = DefaultRouter()
-binary_router.register(r'registry', binary_views.BinaryFrameRegistryViewSet, basename='binary-registry')
-binary_router.register(r'metadata', binary_views.BinaryFrameMetadataViewSet, basename='binary-metadata')
-
 urlpatterns = [
     # === ARD Aria Streams API v1 ===
     
@@ -32,17 +35,26 @@ urlpatterns = [
     # Core processed data endpoints (DRF ViewSets)  
     path('api/', include(router.urls)),
     
-    # Raw data endpoints (사용자 정의 형식 지원)
-    path('raw/', include('aria_streams.raw_urls')),
+    # Raw data endpoints moved to deprecated - using clean pipeline
+    # path('raw/', include('aria_streams.raw_urls')),
     
-    # Binary data endpoints (DRF ViewSets) - moved to specific path
-    path('binary/api/', include(binary_router.urls)),
-    
-    # Binary streaming endpoints (high-performance direct access)
-    path('binary/data/<str:frame_id>/', binary_views.BinaryDataAccessView.as_view(), name='binary-data-access'),
-    path('binary/streaming/', binary_views.BinaryStreamingControlView.as_view(), name='binary-streaming'),
-    path('binary/test-message/', binary_views.BinaryTestMessageView.as_view(), name='binary-test'),
-    path('binary/analytics/', binary_views.BinaryAnalyticsView.as_view(), name='binary-analytics'),
+    # Unity Integration APIs (WebSocket-based - see routing.py for ws:// endpoints)
+    # NEW: Use WebSocket for real-time streaming: ws://localhost:8000/ws/unity/stream/{session_id}/
+]
+
+# Unity Views가 있을 때만 추가
+if UNITY_VIEWS_AVAILABLE:
+    urlpatterns.extend([
+        path('unity/websocket-info/', unity_views.UnityWebSocketInfoView.as_view(), name='unity-websocket-info'),
+        path('unity/example/', unity_views.UnityExampleView.as_view(), name='unity-example'),
+        
+        # Legacy REST APIs (for compatibility)
+        path('unity/latest-frame/', unity_views.UnityLatestFrameView.as_view(), name='unity-latest-frame'),
+        path('unity/status/', unity_views.UnityStreamingStatusView.as_view(), name='unity-status'),
+    ])
+
+# 나머지 URL patterns
+urlpatterns.extend([
     
     # Simple image viewing (direct from Kafka)
     path('simple-image/', views.SimpleImageView.as_view(), name='simple-image'),
@@ -50,6 +62,22 @@ urlpatterns = [
     
     # Direct image viewing (최단 경로)
     path('direct-image/', views.DirectImageView.as_view(), name='direct-image'),
+    
+    # Live streaming viewer with replay control (deprecated)
+    # path('live-stream/', live_stream_view.LiveStreamView.as_view(), name='live-stream'),
+    
+    # Project Aria 공식 Device Stream API 기반 실시간 스트리밍
+    path('device-stream/', real_time_stream_view.RealTimeStreamView.as_view(), name='device-stream'),
+    path('device-stream/latest-frame/', real_time_stream_view.LatestFrameView.as_view(), name='latest-frame'),
+    path('device-stream/<str:action>/', real_time_stream_view.DeviceStreamControlView.as_view(), name='device-stream-control'),
+    
+    # 깔끔한 VRS → Kafka → API 파이프라인  
+    path('clean-kafka/<str:action>/', clean_vrs_kafka.CleanKafkaStreamAPI.as_view(), name='clean-kafka-control'),
+    path('clean-kafka/latest-frame/', clean_vrs_kafka.CleanKafkaFrameAPI.as_view(), name='clean-kafka-frame'),
+    
+    # Project Aria 공식 Device Stream API + Kafka 통합
+    path('kafka-device-stream/<str:action>/', kafka_device_stream.KafkaDeviceStreamControlView.as_view(), name='kafka-device-stream-control'),
+    path('kafka-device-stream/latest-frame/', kafka_device_stream.KafkaLatestFrameView.as_view(), name='kafka-device-stream-frame'),
     
     # Image metadata and individual image viewing
     path('image-list/', views.ImageMetadataListView.as_view(), name='image-list'),
@@ -74,4 +102,4 @@ urlpatterns = [
     # path('eye-gaze/', views_old_function_based.stream_eye_gaze_data, name='stream_eye_gaze_legacy'),
     # path('hand-tracking/', views_old_function_based.stream_hand_tracking_data, name='stream_hand_tracking_legacy'),
     # path('test/', views_old_function_based.send_test_message, name='send_test_message_legacy'),
-]
+])
