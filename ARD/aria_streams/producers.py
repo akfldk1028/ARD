@@ -11,11 +11,14 @@ logger = logging.getLogger(__name__)
 
 class AriaKafkaProducer:
     def __init__(self, bootstrap_servers=None):
-        self.bootstrap_servers = bootstrap_servers or os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'kafka-all:9092')
+        self.bootstrap_servers = bootstrap_servers or os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
         self.producer = None
         self.topics = {
             'vrs_raw_stream': 'vrs-raw-stream',
             'imu_data': 'imu-data',
+            'magnetometer_data': 'magnetometer-data',
+            'barometer_data': 'barometer-data',
+            'audio_data': 'audio-data',
             'mps_eye_gaze_general': 'mps-eye-gaze-general', 
             'mps_eye_gaze_personalized': 'mps-eye-gaze-personalized',
             'mps_hand_tracking': 'mps-hand-tracking',
@@ -23,7 +26,12 @@ class AriaKafkaProducer:
             'mps_slam_points': 'mps-slam-points',
             'mps_slam_calibration': 'mps-slam-calibration',
             'analytics_real_time': 'analytics-real-time',
-            # Vision topics removed - pure streaming only
+            # Real-time sensor streaming topics
+            'aria_imu_real_time': 'aria-imu-real-time',
+            'aria_mag_real_time': 'aria-mag-real-time',
+            'aria_baro_real_time': 'aria-baro-real-time',
+            'aria_audio_real_time': 'aria-audio-real-time',
+            'aria_sensor_fusion': 'aria-sensor-fusion',
         }
     
     def _get_producer(self):
@@ -271,6 +279,176 @@ class AriaKafkaProducer:
             logger.error(f"Failed to send test VRS message: {e}")
             return False
     
+    def send_real_time_imu(self, stream_id: str, imu_data: dict, metadata: dict) -> bool:
+        """실시간 IMU 데이터 전송 (가속도계 + 자이로스코프)"""
+        try:
+            imu_message = {
+                'metadata': {
+                    **metadata,
+                    'data_type': 'real_time_imu',
+                    'stream_id': stream_id
+                },
+                'imu_data': {
+                    'accel_x': imu_data.get('accel_x', 0.0),
+                    'accel_y': imu_data.get('accel_y', 0.0), 
+                    'accel_z': imu_data.get('accel_z', 0.0),
+                    'gyro_x': imu_data.get('gyro_x', 0.0),
+                    'gyro_y': imu_data.get('gyro_y', 0.0),
+                    'gyro_z': imu_data.get('gyro_z', 0.0),
+                    'temperature': imu_data.get('temperature', 0.0)
+                }
+            }
+            
+            producer = self._get_producer()
+            future = producer.send(self.topics['aria_imu_real_time'], imu_message)
+            record_metadata = future.get(timeout=10)
+            
+            logger.debug(f"Real-time IMU data sent: {stream_id}")
+            return True
+            
+        except KafkaError as e:
+            logger.error(f"Failed to send real-time IMU data: {e}")
+            return False
+
+    def send_real_time_magnetometer(self, stream_id: str, mag_data: dict, metadata: dict) -> bool:
+        """실시간 자력계 데이터 전송"""
+        try:
+            mag_message = {
+                'metadata': {
+                    **metadata,
+                    'data_type': 'real_time_magnetometer',
+                    'stream_id': stream_id
+                },
+                'magnetometer_data': {
+                    'mag_x': mag_data.get('mag_x', 0.0),
+                    'mag_y': mag_data.get('mag_y', 0.0),
+                    'mag_z': mag_data.get('mag_z', 0.0),
+                    'temperature': mag_data.get('temperature', 0.0)
+                }
+            }
+            
+            producer = self._get_producer()
+            future = producer.send(self.topics['aria_mag_real_time'], mag_message)
+            record_metadata = future.get(timeout=10)
+            
+            logger.debug(f"Real-time magnetometer data sent: {stream_id}")
+            return True
+            
+        except KafkaError as e:
+            logger.error(f"Failed to send real-time magnetometer data: {e}")
+            return False
+
+    def send_real_time_barometer(self, stream_id: str, baro_data: dict, metadata: dict) -> bool:
+        """실시간 기압계 데이터 전송"""
+        try:
+            baro_message = {
+                'metadata': {
+                    **metadata,
+                    'data_type': 'real_time_barometer',
+                    'stream_id': stream_id
+                },
+                'barometer_data': {
+                    'pressure': baro_data.get('pressure', 0.0),
+                    'temperature': baro_data.get('temperature', 0.0)
+                }
+            }
+            
+            producer = self._get_producer()
+            future = producer.send(self.topics['aria_baro_real_time'], baro_message)
+            record_metadata = future.get(timeout=10)
+            
+            logger.debug(f"Real-time barometer data sent: {stream_id}")
+            return True
+            
+        except KafkaError as e:
+            logger.error(f"Failed to send real-time barometer data: {e}")
+            return False
+
+    def send_real_time_audio(self, stream_id: str, audio_data: dict, metadata: dict) -> bool:
+        """실시간 오디오 데이터 전송"""
+        try:
+            audio_message = {
+                'metadata': {
+                    **metadata,
+                    'data_type': 'real_time_audio',
+                    'stream_id': stream_id
+                },
+                'audio_data': {
+                    'sample_rate': audio_data.get('sample_rate', 48000),
+                    'channels': audio_data.get('channels', 7),
+                    'audio_samples': audio_data.get('audio_samples', []),
+                    'rms_level': audio_data.get('rms_level', 0.0),
+                    'peak_level': audio_data.get('peak_level', 0.0)
+                }
+            }
+            
+            producer = self._get_producer()
+            future = producer.send(self.topics['aria_audio_real_time'], audio_message)
+            record_metadata = future.get(timeout=10)
+            
+            logger.debug(f"Real-time audio data sent: {stream_id}")
+            return True
+            
+        except KafkaError as e:
+            logger.error(f"Failed to send real-time audio data: {e}")
+            return False
+
+    def send_sensor_fusion_data(self, fusion_data: dict, metadata: dict) -> bool:
+        """센서 융합 데이터 전송 (IMU + 자력계 + 기압계 조합으로 6DOF 포즈)"""
+        try:
+            fusion_message = {
+                'metadata': {
+                    **metadata,
+                    'data_type': 'sensor_fusion',
+                    'fusion_timestamp': datetime.utcnow().isoformat()
+                },
+                'fusion_data': {
+                    # 6DOF 포즈 정보
+                    'position': {
+                        'x': fusion_data.get('pos_x', 0.0),
+                        'y': fusion_data.get('pos_y', 0.0),
+                        'z': fusion_data.get('pos_z', 0.0)
+                    },
+                    'rotation': {
+                        'quaternion': {
+                            'w': fusion_data.get('quat_w', 1.0),
+                            'x': fusion_data.get('quat_x', 0.0),
+                            'y': fusion_data.get('quat_y', 0.0),
+                            'z': fusion_data.get('quat_z', 0.0)
+                        },
+                        'euler': {
+                            'roll': fusion_data.get('roll', 0.0),
+                            'pitch': fusion_data.get('pitch', 0.0),
+                            'yaw': fusion_data.get('yaw', 0.0)
+                        }
+                    },
+                    # 센서 원본 데이터
+                    'raw_sensors': {
+                        'imu_accel': fusion_data.get('imu_accel', [0.0, 0.0, 0.0]),
+                        'imu_gyro': fusion_data.get('imu_gyro', [0.0, 0.0, 0.0]),
+                        'magnetometer': fusion_data.get('magnetometer', [0.0, 0.0, 0.0]),
+                        'barometer': fusion_data.get('barometer', 0.0)
+                    },
+                    # 센서 품질 정보
+                    'quality': {
+                        'confidence': fusion_data.get('confidence', 0.0),
+                        'accuracy': fusion_data.get('accuracy', 0.0),
+                        'sensor_health': fusion_data.get('sensor_health', 'unknown')
+                    }
+                }
+            }
+            
+            producer = self._get_producer()
+            future = producer.send(self.topics['aria_sensor_fusion'], fusion_message)
+            record_metadata = future.get(timeout=10)
+            
+            logger.debug(f"Sensor fusion data sent")
+            return True
+            
+        except KafkaError as e:
+            logger.error(f"Failed to send sensor fusion data: {e}")
+            return False
+
     def close(self):
         if self.producer:
             self.producer.close()

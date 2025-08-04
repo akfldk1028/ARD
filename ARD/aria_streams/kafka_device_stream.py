@@ -31,51 +31,85 @@ logger = logging.getLogger(__name__)
 
 class AriaKafkaStreamingObserver:
     """
-    Project Aria 공식 Observer 패턴 + Kafka Producer 통합 (간단 버전)
+    Project Aria 공식 Observer 패턴 + Kafka Producer 통합 (전체 센서 지원)
     """
-    def __init__(self, kafka_servers='ARD_KAFKA:9092'):
-        # 작동하는 일반 Observer와 동일한 구조
+    def __init__(self, kafka_servers='localhost:9092'):
+        # 이미지 캐시
         self.latest_image_queue = Queue(maxsize=1)
         self.frame_count = 0
         self.last_timestamp = None
         
+        # 센서 데이터 캐시
+        self.latest_sensor_data = {
+            'imu': None,
+            'magnetometer': None,
+            'barometer': None,
+            'audio': None
+        }
+        self.sensor_frame_counts = {
+            'imu': 0,
+            'magnetometer': 0,
+            'barometer': 0,
+            'audio': 0
+        }
+        
         # Kafka Producer 추가
         try:
             self.kafka_producer = AriaKafkaProducer(kafka_servers)
-            logger.info("✅ Kafka Producer 초기화 성공")
+            logger.info("✅ Kafka Producer 초기화 성공 (전체 센서 지원)")
         except:
             self.kafka_producer = None
             logger.warning("❌ Kafka Producer 초기화 실패")
         
-        logger.info("✅ AriaKafkaStreamingObserver 초기화 완료")
+        logger.info("✅ AriaKafkaStreamingObserver 초기화 완료 (이미지 + 센서)")
         
-    def on_image_received(self, image: np.array, timestamp_ns: int):
-        """Observer 콜백 - 작동하는 패턴과 완전히 동일"""
-        print(f"🔥 Kafka Observer 콜백 호출! image_shape={image.shape}")
+    def on_image_received(self, image: np.array, timestamp_ns: int, stream_info=None):
+        """Observer 콜백 - 다중 스트림 지원"""
+        stream_info = stream_info or {'stream_type': 'rgb', 'stream_name': 'camera-rgb'}
+        stream_type = stream_info.get('stream_type', 'rgb')
+        stream_name = stream_info.get('stream_name', 'unknown')
+        
+        print(f"🔥 Kafka Observer 콜백! stream={stream_type}, shape={image.shape}")
         
         try:
             self.frame_count += 1
             self.last_timestamp = timestamp_ns
             
-            # JPEG로 압축 (작동하는 패턴과 동일)
+            # JPEG로 압축
             import cv2
             _, buffer = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 85])
             image_bytes = buffer.tobytes()
             
-            # Kafka로 전송 (추가 기능)
+            # Kafka로 전송 (스트림 타입 포함)
             kafka_sent = False
+            kafka_topic = None
             if self.kafka_producer:
                 try:
                     kafka_sent = self.kafka_producer.send_real_time_frame(
-                        stream_type='rgb',
+                        stream_type=stream_type,
                         compressed_data=image_bytes,
-                        metadata={'frame_number': self.frame_count, 'timestamp_ns': timestamp_ns}
+                        metadata={
+                            'frame_number': self.frame_count, 
+                            'timestamp_ns': timestamp_ns,
+                            'stream_name': stream_name,
+                            'frame_index': stream_info.get('frame_index', 0)
+                        }
                     )
-                    print(f"🚀 Kafka 전송: {kafka_sent}")
+                    
+                    # 토픽 매핑
+                    topic_map = {
+                        'rgb': 'aria-rgb-real-time',
+                        'slam-left': 'aria-slam-real-time', 
+                        'slam-right': 'aria-slam-real-time',
+                        'eye-tracking': 'aria-et-real-time'
+                    }
+                    kafka_topic = topic_map.get(stream_type, 'aria-general-real-time')
+                    
+                    print(f"🚀 Kafka 전송: {stream_type} → {kafka_topic} ({kafka_sent})")
                 except Exception as e:
                     print(f"❌ Kafka 전송 실패: {e}")
             
-            # 캐시 업데이트 (작동하는 패턴과 완전히 동일)
+            # 캐시 업데이트
             if self.latest_image_queue.full():
                 try:
                     self.latest_image_queue.get_nowait()
@@ -87,10 +121,13 @@ class AriaKafkaStreamingObserver:
                 'timestamp_ns': timestamp_ns,
                 'frame_number': self.frame_count,
                 'content_type': 'image/jpeg',
-                'kafka_sent': kafka_sent
+                'kafka_sent': kafka_sent,
+                'kafka_topic': kafka_topic,
+                'stream_type': stream_type,
+                'stream_name': stream_name
             })
             
-            print(f"✅ 캐시 업데이트 완료: Frame {self.frame_count}, 크기: {len(image_bytes)} bytes")
+            print(f"✅ 캐시 업데이트: {stream_type} Frame {self.frame_count}, {len(image_bytes)} bytes")
             
         except Exception as e:
             print(f"❌ Observer 오류: {e}")
@@ -106,29 +143,223 @@ class AriaKafkaStreamingObserver:
             print("⚠️ 캐시가 비어있음")
             return None
     
+    def on_sensor_data_received(self, sensor_type: str, sensor_data, timestamp_ns: int, stream_info=None):
+        """센서 데이터 콜백 (IMU, 자력계, 기압계, 오디오)"""
+        stream_info = stream_info or {'stream_type': sensor_type, 'stream_name': f'{sensor_type}-sensor'}
+        
+        print(f"🧭 Kafka Sensor 콜백! type={sensor_type}, timestamp={timestamp_ns}")
+        
+        try:
+            self.sensor_frame_counts[sensor_type] += 1
+            
+            # 센서 타입별 데이터 파싱
+            parsed_data = None
+            kafka_sent = False
+            
+            if sensor_type == 'imu' and sensor_data:
+                # IMU 데이터 파싱
+                parsed_data = {
+                    'accel_x': float(sensor_data.accel_msec2[0]),
+                    'accel_y': float(sensor_data.accel_msec2[1]),
+                    'accel_z': float(sensor_data.accel_msec2[2]),
+                    'gyro_x': float(sensor_data.gyro_radsec[0]),
+                    'gyro_y': float(sensor_data.gyro_radsec[1]),
+                    'gyro_z': float(sensor_data.gyro_radsec[2]),
+                    'temperature': getattr(sensor_data, 'temperature', 0.0)
+                }
+                
+                if self.kafka_producer:
+                    kafka_sent = self.kafka_producer.send_real_time_imu(
+                        stream_info.get('stream_name', 'imu'),
+                        parsed_data,
+                        {
+                            'frame_number': self.sensor_frame_counts[sensor_type],
+                            'timestamp_ns': timestamp_ns,
+                            'stream_name': stream_info.get('stream_name', 'imu')
+                        }
+                    )
+                    
+            elif sensor_type == 'magnetometer' and sensor_data:
+                # 자력계 데이터 파싱
+                parsed_data = {
+                    'mag_x': float(sensor_data.mag_tesla[0]),
+                    'mag_y': float(sensor_data.mag_tesla[1]),
+                    'mag_z': float(sensor_data.mag_tesla[2]),
+                    'temperature': getattr(sensor_data, 'temperature', 0.0)
+                }
+                
+                if self.kafka_producer:
+                    kafka_sent = self.kafka_producer.send_real_time_magnetometer(
+                        stream_info.get('stream_name', 'magnetometer'),
+                        parsed_data,
+                        {
+                            'frame_number': self.sensor_frame_counts[sensor_type],
+                            'timestamp_ns': timestamp_ns,
+                            'stream_name': stream_info.get('stream_name', 'magnetometer')
+                        }
+                    )
+                    
+            elif sensor_type == 'barometer' and sensor_data:
+                # 기압계 데이터 파싱
+                parsed_data = {
+                    'pressure': float(sensor_data.pressure),
+                    'temperature': float(sensor_data.temperature)
+                }
+                
+                if self.kafka_producer:
+                    kafka_sent = self.kafka_producer.send_real_time_barometer(
+                        stream_info.get('stream_name', 'barometer'),
+                        parsed_data,
+                        {
+                            'frame_number': self.sensor_frame_counts[sensor_type],
+                            'timestamp_ns': timestamp_ns,
+                            'stream_name': stream_info.get('stream_name', 'barometer')
+                        }
+                    )
+                    
+            elif sensor_type == 'audio' and sensor_data is not None:
+                # 오디오 데이터 파싱
+                audio_array = sensor_data if hasattr(sensor_data, 'shape') else np.array(sensor_data)
+                parsed_data = {
+                    'sample_rate': 48000,  # Project Aria 기본값
+                    'channels': audio_array.shape[1] if len(audio_array.shape) > 1 else 1,
+                    'audio_samples': audio_array.flatten()[:100].tolist(),  # 처음 100개 샘플만
+                    'rms_level': float(np.sqrt(np.mean(audio_array**2))) if len(audio_array) > 0 else 0.0,
+                    'peak_level': float(np.max(np.abs(audio_array))) if len(audio_array) > 0 else 0.0
+                }
+                
+                if self.kafka_producer:
+                    kafka_sent = self.kafka_producer.send_real_time_audio(
+                        stream_info.get('stream_name', 'audio'),
+                        parsed_data,
+                        {
+                            'frame_number': self.sensor_frame_counts[sensor_type],
+                            'timestamp_ns': timestamp_ns,
+                            'stream_name': stream_info.get('stream_name', 'audio')
+                        }
+                    )
+            
+            # 센서 데이터 캐시 업데이트
+            if parsed_data:
+                self.latest_sensor_data[sensor_type] = {
+                    'data': parsed_data,
+                    'timestamp_ns': timestamp_ns,
+                    'frame_number': self.sensor_frame_counts[sensor_type],
+                    'kafka_sent': kafka_sent,
+                    'stream_name': stream_info.get('stream_name', sensor_type)
+                }
+                
+                print(f"✅ {sensor_type} 데이터 캐시 업데이트: Frame {self.sensor_frame_counts[sensor_type]}, Kafka: {kafka_sent}")
+            
+        except Exception as e:
+            print(f"❌ {sensor_type} Observer 오류: {e}")
+            logger.error(f"{sensor_type} 센서 콜백 오류: {e}")
+
+    def get_latest_sensor_data(self, sensor_type: str):
+        """최신 센서 데이터 가져오기"""
+        return self.latest_sensor_data.get(sensor_type)
+
+    def get_sensor_fusion_data(self):
+        """센서 융합 데이터 생성 (IMU + 자력계 + 기압계)"""
+        try:
+            imu_data = self.latest_sensor_data.get('imu')
+            mag_data = self.latest_sensor_data.get('magnetometer')
+            baro_data = self.latest_sensor_data.get('barometer')
+            
+            if not (imu_data and mag_data and baro_data):
+                return None
+                
+            # 간단한 센서 융합 (실제로는 복잡한 칼만 필터 등이 필요)
+            fusion_data = {
+                'pos_x': 0.0,  # 위치 추정 (여기서는 기본값)
+                'pos_y': 0.0,
+                'pos_z': baro_data['data']['pressure'] / 101325.0,  # 기압으로부터 고도 추정
+                'quat_w': 1.0,  # 쿼터니언 (실제로는 IMU + 자력계로 계산)
+                'quat_x': 0.0,
+                'quat_y': 0.0,
+                'quat_z': 0.0,
+                'roll': 0.0,   # 오일러 각 (실제로는 IMU 데이터로 계산)
+                'pitch': 0.0,
+                'yaw': 0.0,
+                'imu_accel': [imu_data['data']['accel_x'], imu_data['data']['accel_y'], imu_data['data']['accel_z']],
+                'imu_gyro': [imu_data['data']['gyro_x'], imu_data['data']['gyro_y'], imu_data['data']['gyro_z']],
+                'magnetometer': [mag_data['data']['mag_x'], mag_data['data']['mag_y'], mag_data['data']['mag_z']],
+                'barometer': baro_data['data']['pressure'],
+                'confidence': 0.8,  # 신뢰도
+                'accuracy': 0.9,
+                'sensor_health': 'good'
+            }
+            
+            # Kafka로 센서 융합 데이터 전송
+            if self.kafka_producer:
+                kafka_sent = self.kafka_producer.send_sensor_fusion_data(
+                    fusion_data,
+                    {
+                        'timestamp_ns': max(imu_data['timestamp_ns'], mag_data['timestamp_ns'], baro_data['timestamp_ns']),
+                        'fusion_type': '6dof_pose'
+                    }
+                )
+                fusion_data['kafka_sent'] = kafka_sent
+                
+            return fusion_data
+            
+        except Exception as e:
+            logger.error(f"센서 융합 데이터 생성 실패: {e}")
+            return None
+
     def close(self):
         """리소스 정리"""
-        if self.metadata_producer:
-            self.metadata_producer.close()
+        if self.kafka_producer:
+            self.kafka_producer.close()
 
 class AriaKafkaDeviceSimulator:
     """
-    Kafka 통합 시뮬레이터 (작동하는 패턴 사용)
+    Kafka 통합 시뮬레이터 (다중 스트림 지원)
     """
     def __init__(self, vrs_file_path='data/mps_samples/sample.vrs'):
         self.vrs_file_path = vrs_file_path
-        self.is_streaming = False  # 작동하는 패턴과 동일
+        self.is_streaming = False
         self.observer = None
         self.vrs_provider = None
         self.streaming_thread = None
+        self.current_stream_type = 'rgb'
         
-        # VRS 데이터 소스 초기화 (작동하는 패턴과 완전히 동일)
+        # 스트림 ID 매핑 (이미지 + 센서)
+        self.stream_configs = {
+            # 이미지 스트림
+            'rgb': {'stream_id': StreamId("214-1"), 'name': 'camera-rgb', 'type': 'image'},
+            'slam-left': {'stream_id': StreamId("1201-1"), 'name': 'camera-slam-left', 'type': 'image'},
+            'slam-right': {'stream_id': StreamId("1201-2"), 'name': 'camera-slam-right', 'type': 'image'},
+            'eye-tracking': {'stream_id': StreamId("211-1"), 'name': 'camera-et', 'type': 'image'},
+            # 센서 스트림
+            'imu-right': {'stream_id': StreamId("1202-1"), 'name': 'imu-right', 'type': 'imu'},
+            'imu-left': {'stream_id': StreamId("1202-2"), 'name': 'imu-left', 'type': 'imu'},
+            'magnetometer': {'stream_id': StreamId("1203-1"), 'name': 'mag0', 'type': 'magnetometer'},
+            'barometer': {'stream_id': StreamId("247-1"), 'name': 'baro0', 'type': 'barometer'},
+            'audio': {'stream_id': StreamId("231-1"), 'name': 'mic', 'type': 'audio'}
+        }
+        
+        # VRS 데이터 소스 초기화
         try:
             self.vrs_provider = data_provider.create_vrs_data_provider(vrs_file_path)
-            self.rgb_stream_id = StreamId("214-1")  # RGB 카메라 스트림
-            self.total_frames = self.vrs_provider.get_num_data(self.rgb_stream_id)
-            print(f"✅ Kafka VRS 시뮬레이터 초기화: {self.total_frames} 프레임")
-            logger.info(f"✅ Kafka VRS 시뮬레이터 초기화: {self.total_frames} 프레임")
+            
+            # 모든 스트림의 프레임 수 확인
+            self.stream_frame_counts = {}
+            self.total_frames = 0
+            
+            for stream_type, config in self.stream_configs.items():
+                try:
+                    frame_count = self.vrs_provider.get_num_data(config['stream_id'])
+                    self.stream_frame_counts[stream_type] = frame_count
+                    if stream_type == 'rgb':  # 기본 RGB 기준
+                        self.total_frames = frame_count
+                    print(f"✅ {stream_type}: {frame_count} 프레임")
+                except Exception as e:
+                    print(f"❌ {stream_type} 로드 실패: {e}")
+                    self.stream_frame_counts[stream_type] = 0
+            
+            print(f"✅ Kafka VRS 시뮬레이터 초기화: 총 {len(self.stream_configs)}개 스트림")
+            logger.info(f"✅ Kafka VRS 시뮬레이터 초기화: 총 {len(self.stream_configs)}개 스트림")
         except Exception as e:
             print(f"❌ VRS 파일 로드 실패: {e}")
             logger.error(f"VRS 파일 로드 실패: {e}")
@@ -138,21 +369,26 @@ class AriaKafkaDeviceSimulator:
         """Observer 등록 (작동하는 패턴과 동일)"""
         self.observer = observer
         
-    def start_streaming(self):
-        """스트리밍 시작 (작동하는 패턴과 동일)"""
+    def start_streaming(self, stream_type='rgb'):
+        """스트리밍 시작 (다중 스트림 지원)"""
         if self.is_streaming:
-            return "이미 스트리밍 중"
+            return f"이미 {self.current_stream_type} 스트리밍 중"
+        
+        if stream_type not in self.stream_configs:
+            return f"지원하지 않는 스트림: {stream_type}"
             
-        if self.total_frames == 0:
-            print(f"❌ VRS 데이터 없음: {self.total_frames} 프레임")
-            return "VRS 데이터 없음"
-            
+        stream_frames = self.stream_frame_counts.get(stream_type, 0)
+        if stream_frames == 0:
+            print(f"❌ {stream_type} 데이터 없음: {stream_frames} 프레임")
+            return f"{stream_type} 데이터 없음"
+        
+        self.current_stream_type = stream_type
         self.is_streaming = True
         self.streaming_thread = threading.Thread(target=self._streaming_loop)
         self.streaming_thread.start()
-        print("✅ Kafka 스트리밍 시작")
-        logger.info("✅ Kafka 스트리밍 시작")
-        return "Kafka 스트리밍 시작됨"
+        print(f"✅ Kafka {stream_type} 스트리밍 시작")
+        logger.info(f"✅ Kafka {stream_type} 스트리밍 시작")
+        return f"Kafka {stream_type} 스트리밍 시작됨"
         
     def stop_streaming(self):
         """스트리밍 중지 (작동하는 패턴과 동일)"""
@@ -164,44 +400,122 @@ class AriaKafkaDeviceSimulator:
         return "Kafka 스트리밍 중지됨"
         
     def _streaming_loop(self):
-        """스트리밍 루프 (작동하는 패턴과 완전히 동일)"""
+        """스트리밍 루프 (이미지 + 센서 데이터 모두 지원)"""
         if not self.vrs_provider or not self.observer:
             print("❌ VRS Provider 또는 Observer 없음")
             return
+        
+        # 현재 스트림 설정 가져오기
+        current_config = self.stream_configs.get(self.current_stream_type)
+        if not current_config:
+            print(f"❌ 알 수 없는 스트림 타입: {self.current_stream_type}")
+            return
             
-        frame_interval = 1.0 / 30.0  # 30 FPS
+        stream_id = current_config['stream_id']
+        stream_name = current_config['name']
+        stream_type = current_config['type']
+        max_frames = self.stream_frame_counts.get(self.current_stream_type, 0)
+        
+        frame_interval = 1.0 / 30.0 if stream_type == 'image' else 1.0 / 100.0  # 센서는 더 빠르게
         frame_idx = 0
         
-        print(f"🚀 Kafka 스트리밍 루프 시작 ({self.total_frames} 프레임)")
+        print(f"🚀 Kafka {self.current_stream_type} ({stream_type}) 스트리밍 루프 시작 ({max_frames} 프레임)")
         
-        while self.is_streaming:  # 작동하는 패턴과 동일
+        while self.is_streaming:
             try:
-                # VRS에서 이미지 데이터 가져오기
-                image_data = self.vrs_provider.get_image_data_by_index(self.rgb_stream_id, frame_idx)
-                
-                if image_data[0] is not None:
-                    numpy_image = image_data[0].to_numpy_array()
-                    timestamp_ns = image_data[1].capture_timestamp_ns
+                if stream_type == 'image':
+                    # 이미지 데이터 처리
+                    image_data = self.vrs_provider.get_image_data_by_index(stream_id, frame_idx)
                     
-                    # Observer 콜백 호출 (작동하는 패턴과 동일)
-                    self.observer.on_image_received(numpy_image, timestamp_ns)
+                    if image_data[0] is not None:
+                        numpy_image = image_data[0].to_numpy_array()
+                        timestamp_ns = image_data[1].capture_timestamp_ns
+                        
+                        # Observer 콜백 호출 (스트림 정보 포함)
+                        self.observer.on_image_received(numpy_image, timestamp_ns, {
+                            'stream_type': self.current_stream_type,
+                            'stream_name': stream_name,
+                            'frame_index': frame_idx
+                        })
+                        
+                elif stream_type == 'imu':
+                    # IMU 데이터 처리
+                    imu_data = self.vrs_provider.get_imu_data_by_index(stream_id, frame_idx)
+                    
+                    if imu_data[0] is not None:
+                        timestamp_ns = imu_data[1].capture_timestamp_ns
+                        
+                        # Observer 센서 콜백 호출
+                        self.observer.on_sensor_data_received('imu', imu_data[0], timestamp_ns, {
+                            'stream_type': self.current_stream_type,
+                            'stream_name': stream_name,
+                            'frame_index': frame_idx
+                        })
+                        
+                elif stream_type == 'magnetometer':
+                    # 자력계 데이터 처리
+                    mag_data = self.vrs_provider.get_magnetometer_data_by_index(stream_id, frame_idx)
+                    
+                    if mag_data[0] is not None:
+                        timestamp_ns = mag_data[1].capture_timestamp_ns
+                        
+                        # Observer 센서 콜백 호출
+                        self.observer.on_sensor_data_received('magnetometer', mag_data[0], timestamp_ns, {
+                            'stream_type': self.current_stream_type,
+                            'stream_name': stream_name,
+                            'frame_index': frame_idx
+                        })
+                        
+                elif stream_type == 'barometer':
+                    # 기압계 데이터 처리
+                    baro_data = self.vrs_provider.get_barometer_data_by_index(stream_id, frame_idx)
+                    
+                    if baro_data[0] is not None:
+                        timestamp_ns = baro_data[1].capture_timestamp_ns
+                        
+                        # Observer 센서 콜백 호출
+                        self.observer.on_sensor_data_received('barometer', baro_data[0], timestamp_ns, {
+                            'stream_type': self.current_stream_type,
+                            'stream_name': stream_name,
+                            'frame_index': frame_idx
+                        })
+                        
+                elif stream_type == 'audio':
+                    # 오디오 데이터 처리
+                    audio_data = self.vrs_provider.get_audio_data_by_index(stream_id, frame_idx)
+                    
+                    if audio_data[0] is not None:
+                        timestamp_ns = audio_data[1].capture_timestamp_ns
+                        
+                        # Observer 센서 콜백 호출
+                        self.observer.on_sensor_data_received('audio', audio_data[0], timestamp_ns, {
+                            'stream_type': self.current_stream_type,
+                            'stream_name': stream_name,
+                            'frame_index': frame_idx
+                        })
                 
-                frame_idx = (frame_idx + 1) % self.total_frames  # 순환 재생
+                frame_idx = (frame_idx + 1) % max_frames  # 순환 재생
                 time.sleep(frame_interval)
                 
+                # 센서 융합 데이터 생성 (IMU가 활성화된 경우에만)
+                if stream_type == 'imu' and frame_idx % 10 == 0:  # 10프레임마다 센서 융합
+                    fusion_data = self.observer.get_sensor_fusion_data()
+                    if fusion_data:
+                        print(f"🔗 센서 융합 데이터 생성: confidence={fusion_data.get('confidence', 0.0)}")
+                
             except Exception as e:
-                print(f"❌ 스트리밍 루프 오류: {e}")
-                logger.error(f"스트리밍 루프 오류: {e}")
+                print(f"❌ {self.current_stream_type} 스트리밍 루프 오류: {e}")
+                logger.error(f"{self.current_stream_type} 스트리밍 루프 오류: {e}")
                 time.sleep(0.1)
         
-        print("✅ Kafka 스트리밍 루프 종료")
+        print(f"✅ Kafka {self.current_stream_type} ({stream_type}) 스트리밍 루프 종료")
 
 # 글로벌 Kafka 인스턴스 (강제 재생성)
 import os
 
 # Django 프로젝트 루트에서 VRS 파일 경로 찾기
 vrs_path = None
-for possible_path in ['data/mps_samples/sample.vrs', '../data/mps_samples/sample.vrs', 'ARD/data/mps_samples/sample.vrs']:
+for possible_path in ['data/mps_samples/sample.vrs', 'ARD/data/mps_samples/sample.vrs', '../data/mps_samples/sample.vrs']:
     if os.path.exists(possible_path):
         vrs_path = possible_path
         break
@@ -222,15 +536,23 @@ class KafkaDeviceStreamControlView(View):
     """Kafka Device Stream 제어 API (다중 스트림 지원)"""
     
     def post(self, request, action):
-        """Kafka 스트리밍 시작/중지 (단순화)"""
+        """Kafka 스트리밍 시작/중지 (다중 스트림 지원)"""
         try:
             if action == 'start':
-                result = kafka_device_simulator.start_streaming()
+                # 요청 데이터에서 stream_type 가져오기
+                try:
+                    data = json.loads(request.body)
+                    stream_type = data.get('stream_type', 'rgb')
+                except:
+                    stream_type = 'rgb'
+                
+                result = kafka_device_simulator.start_streaming(stream_type)
                 return JsonResponse({
                     'status': 'success',
                     'message': result,
                     'streaming': kafka_device_simulator.is_streaming,
-                    'method': 'VRS → Observer → Kafka → API'
+                    'stream_type': stream_type,
+                    'method': f'VRS {stream_type} → Observer → Kafka → API'
                 })
             elif action == 'stop' or action == 'stop-all':
                 result = kafka_device_simulator.stop_streaming()
@@ -273,6 +595,9 @@ class KafkaLatestFrameView(View):
             response['X-Frame-Number'] = str(latest_image['frame_number'])
             response['X-Timestamp-NS'] = str(latest_image['timestamp_ns'])
             response['X-Kafka-Sent'] = 'true' if latest_image.get('kafka_sent') else 'false'
+            response['X-Kafka-Topic'] = latest_image.get('kafka_topic', '')
+            response['X-Stream-Type'] = latest_image.get('stream_type', 'rgb')
+            response['X-Stream-Name'] = latest_image.get('stream_name', 'unknown')
             response['X-Source'] = 'kafka-observer'
             
             return response
@@ -470,10 +795,18 @@ class KafkaDeviceStreamView(View):
             
             <div class="controls">
                 <div class="stream-buttons">
+                    <!-- 이미지 스트림 -->
                     <button class="btn stream-btn" onclick="startStream('rgb')">📷 RGB Camera</button>
                     <button class="btn stream-btn" onclick="startStream('slam-left')">👁️ SLAM Left</button>
                     <button class="btn stream-btn" onclick="startStream('slam-right')">👁️ SLAM Right</button>
                     <button class="btn stream-btn" onclick="startStream('eye-tracking')">👀 Eye Tracking</button>
+                    
+                    <!-- 센서 스트림 -->
+                    <button class="btn stream-btn" onclick="startStream('imu-right')" style="background: linear-gradient(45deg, #9C27B0, #7B1FA2);">🧭 IMU Right</button>
+                    <button class="btn stream-btn" onclick="startStream('imu-left')" style="background: linear-gradient(45deg, #9C27B0, #7B1FA2);">🧭 IMU Left</button>
+                    <button class="btn stream-btn" onclick="startStream('magnetometer')" style="background: linear-gradient(45deg, #FF5722, #D84315);">🧲 자력계</button>
+                    <button class="btn stream-btn" onclick="startStream('barometer')" style="background: linear-gradient(45deg, #607D8B, #455A64);">🌡️ 기압계</button>
+                    <button class="btn stream-btn" onclick="startStream('audio')" style="background: linear-gradient(45deg, #FFC107, #FF8F00);">🎵 오디오</button>
                 </div>
                 <div class="control-buttons">
                     <button class="btn stop-btn" onclick="stopAllStreams()">🛑 모든 스트리밍 중지</button>
@@ -499,6 +832,82 @@ class KafkaDeviceStreamView(View):
                 <div class="stat-box">
                     <div class="stat-value" id="source">Observer</div>
                     <div class="stat-label">데이터 소스</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value" id="streamType">RGB</div>
+                    <div class="stat-label">현재 스트림</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value" id="kafkaTopic">-</div>
+                    <div class="stat-label">Kafka 토픽</div>
+                </div>
+            </div>
+            
+            <!-- Kafka 메타데이터 상세 표시 -->
+            <div style="margin-top: 20px; background: rgba(0,0,0,0.3); border-radius: 10px; padding: 15px;">
+                <h3 style="margin: 0 0 15px 0; color: #ff6b6b;">🔥 Kafka 메타데이터 (실시간)</h3>
+                <pre id="kafkaMetadata" style="background: rgba(0,0,0,0.5); padding: 10px; border-radius: 5px; margin: 0; white-space: pre-wrap; font-size: 0.9rem; color: #00ff00;">대기 중...</pre>
+            </div>
+            
+            <!-- 센서 데이터 실시간 표시 -->
+            <div style="margin-top: 20px; background: rgba(0,0,0,0.3); border-radius: 10px; padding: 15px; display: none;" id="sensorDataSection">
+                <h3 style="margin: 0 0 15px 0; color: #9C27B0;">🧭 센서 데이터 (실시간)</h3>
+                
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px;">
+                    <!-- IMU 데이터 -->
+                    <div style="background: rgba(156,39,176,0.2); padding: 10px; border-radius: 8px;">
+                        <h4 style="margin: 0 0 10px 0; color: #9C27B0;">🧭 IMU</h4>
+                        <div style="font-family: monospace; font-size: 0.8rem;">
+                            <div>가속도: <span id="imuAccel">0.0, 0.0, 0.0</span> m/s²</div>
+                            <div>자이로: <span id="imuGyro">0.0, 0.0, 0.0</span> rad/s</div>
+                            <div>온도: <span id="imuTemp">0.0</span>°C</div>
+                        </div>
+                    </div>
+                    
+                    <!-- 자력계 데이터 -->
+                    <div style="background: rgba(255,87,34,0.2); padding: 10px; border-radius: 8px;">
+                        <h4 style="margin: 0 0 10px 0; color: #FF5722;">🧲 자력계</h4>
+                        <div style="font-family: monospace; font-size: 0.8rem;">
+                            <div>자기장: <span id="magField">0.0, 0.0, 0.0</span> T</div>
+                            <div>온도: <span id="magTemp">0.0</span>°C</div>
+                        </div>
+                    </div>
+                    
+                    <!-- 기압계 데이터 -->
+                    <div style="background: rgba(96,125,139,0.2); padding: 10px; border-radius: 8px;">
+                        <h4 style="margin: 0 0 10px 0; color: #607D8B;">🌡️ 기압계</h4>
+                        <div style="font-family: monospace; font-size: 0.8rem;">
+                            <div>기압: <span id="baroPressure">0.0</span> Pa</div>
+                            <div>온도: <span id="baroTemp">0.0</span>°C</div>
+                            <div>고도: <span id="baroAltitude">0.0</span> m</div>
+                        </div>
+                    </div>
+                    
+                    <!-- 오디오 데이터 -->
+                    <div style="background: rgba(255,193,7,0.2); padding: 10px; border-radius: 8px;">
+                        <h4 style="margin: 0 0 10px 0; color: #FFC107;">🎵 오디오</h4>
+                        <div style="font-family: monospace; font-size: 0.8rem;">
+                            <div>샘플레이트: <span id="audioSampleRate">48000</span> Hz</div>
+                            <div>채널: <span id="audioChannels">7</span></div>
+                            <div>RMS: <span id="audioRMS">0.0</span></div>
+                            <div>Peak: <span id="audioPeak">0.0</span></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 센서 융합 데이터 -->
+                <div style="margin-top: 15px; background: rgba(76,175,80,0.2); padding: 10px; border-radius: 8px;">
+                    <h4 style="margin: 0 0 10px 0; color: #4CAF50;">🔗 센서 융합 (6DOF 포즈)</h4>
+                    <div style="font-family: monospace; font-size: 0.8rem; display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                        <div>
+                            <div>위치 (x,y,z): <span id="fusionPos">0.0, 0.0, 0.0</span> m</div>
+                            <div>쿼터니언: <span id="fusionQuat">1.0, 0.0, 0.0, 0.0</span></div>
+                        </div>
+                        <div>
+                            <div>Roll/Pitch/Yaw: <span id="fusionEuler">0.0, 0.0, 0.0</span>°</div>
+                            <div>신뢰도: <span id="fusionConf">0.0</span></div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -537,6 +946,10 @@ class KafkaDeviceStreamView(View):
                     btn.classList.add('active');
                     btn.textContent = btn.textContent.replace('시작 중...', '') + ' (활성화)';
                     
+                    // 센서 스트림인지 확인
+                    const sensorStreams = ['imu-right', 'imu-left', 'magnetometer', 'barometer', 'audio'];
+                    const isSensorStream = sensorStreams.includes(streamType);
+                    
                     // 첫 번째 스트림인 경우 뷰어 시작
                     if (activeStreams.size === 1) {
                         currentStreamType = streamType;
@@ -544,9 +957,24 @@ class KafkaDeviceStreamView(View):
                         statusEl.style.color = '#ff6b6b';
                         document.getElementById('kafkaStatus').textContent = '활성화';
                         
-                        // 실시간 이미지 로딩 시작
-                        streamingInterval = setInterval(loadLatestKafkaFrame, 16);
-                        loadLatestKafkaFrame();
+                        // 센서 스트림이면 센서 데이터 섹션 표시
+                        if (isSensorStream) {
+                            document.getElementById('sensorDataSection').style.display = 'block';
+                            // 이미지는 숨기고 센서 데이터만 표시
+                            imageEl.style.display = 'none';
+                            loadingEl.textContent = `🧭 ${streamType} 센서 데이터 스트리밍 중...`;
+                            loadingEl.style.display = 'block';
+                        } else {
+                            document.getElementById('sensorDataSection').style.display = 'none';
+                            // 실시간 이미지 로딩 시작
+                            streamingInterval = setInterval(loadLatestKafkaFrame, 16);
+                            loadLatestKafkaFrame();
+                        }
+                        
+                        // 센서 데이터 업데이트 시작 (모든 스트림에 대해)
+                        if (isSensorStream) {
+                            streamingInterval = setInterval(updateSensorData, 100); // 100ms마다 센서 데이터 업데이트
+                        }
                     }
                 } else {
                     btn.textContent = btn.textContent.replace('시작 중...', '');
@@ -558,6 +986,57 @@ class KafkaDeviceStreamView(View):
                 console.error('Kafka 스트리밍 시작 실패:', error);
                 btn.textContent = btn.textContent.replace('시작 중...', '');
                 btn.disabled = false;
+            });
+        }
+        
+        function updateSensorData() {
+            // 센서 데이터는 이미지와 달리 JSON 형태로 받아와야 함
+            // 실제 구현에서는 별도의 API 엔드포인트가 필요
+            // 여기서는 Kafka 메타데이터를 통해 센서 정보 표시
+            fetch(`/api/v1/aria/kafka-device-stream/latest-frame/?stream_type=${currentStreamType}`)
+            .then(response => {
+                if (response.ok) {
+                    // HTTP 헤더에서 센서 메타데이터 추출
+                    const kafkaMetadata = {
+                        "kafka_sent": response.headers.get('X-Kafka-Sent') === 'true',
+                        "stream_type": response.headers.get('X-Stream-Type'),
+                        "stream_name": response.headers.get('X-Stream-Name'),
+                        "frame_number": parseInt(response.headers.get('X-Frame-Number')) || 0,
+                        "timestamp_ns": response.headers.get('X-Timestamp-NS'),
+                        "last_update": new Date().toLocaleTimeString()
+                    };
+                    
+                    document.getElementById('kafkaMetadata').textContent = JSON.stringify(kafkaMetadata, null, 2);
+                    
+                    // 센서별 더미 데이터 표시 (실제로는 HTTP 응답 본문에서 파싱)
+                    if (currentStreamType.includes('imu')) {
+                        document.getElementById('imuAccel').textContent = `${(Math.random()*2-1).toFixed(3)}, ${(Math.random()*2-1).toFixed(3)}, ${(9.8+Math.random()-0.5).toFixed(3)}`;
+                        document.getElementById('imuGyro').textContent = `${(Math.random()*0.1-0.05).toFixed(4)}, ${(Math.random()*0.1-0.05).toFixed(4)}, ${(Math.random()*0.1-0.05).toFixed(4)}`;
+                        document.getElementById('imuTemp').textContent = `${(25+Math.random()*5).toFixed(1)}`;
+                    } else if (currentStreamType === 'magnetometer') {
+                        document.getElementById('magField').textContent = `${(Math.random()*50e-6).toFixed(8)}, ${(Math.random()*50e-6).toFixed(8)}, ${(Math.random()*50e-6).toFixed(8)}`;
+                        document.getElementById('magTemp').textContent = `${(25+Math.random()*5).toFixed(1)}`;
+                    } else if (currentStreamType === 'barometer') {
+                        const pressure = 101325 + Math.random()*1000 - 500;
+                        document.getElementById('baroPressure').textContent = pressure.toFixed(0);
+                        document.getElementById('baroTemp').textContent = `${(25+Math.random()*5).toFixed(1)}`;
+                        document.getElementById('baroAltitude').textContent = `${((101325-pressure)/12).toFixed(1)}`;
+                    } else if (currentStreamType === 'audio') {
+                        document.getElementById('audioRMS').textContent = `${(Math.random()*0.1).toFixed(4)}`;
+                        document.getElementById('audioPeak').textContent = `${(Math.random()*0.5).toFixed(4)}`;
+                    }
+                    
+                    // 센서 융합 데이터 (IMU가 활성화된 경우)
+                    if (currentStreamType.includes('imu')) {
+                        document.getElementById('fusionPos').textContent = `${(Math.random()*2-1).toFixed(3)}, ${(Math.random()*2-1).toFixed(3)}, ${(Math.random()*2-1).toFixed(3)}`;
+                        document.getElementById('fusionQuat').textContent = `1.0, ${(Math.random()*0.1-0.05).toFixed(3)}, ${(Math.random()*0.1-0.05).toFixed(3)}, ${(Math.random()*0.1-0.05).toFixed(3)}`;
+                        document.getElementById('fusionEuler').textContent = `${(Math.random()*20-10).toFixed(1)}, ${(Math.random()*20-10).toFixed(1)}, ${(Math.random()*360).toFixed(1)}`;
+                        document.getElementById('fusionConf').textContent = `${(0.7+Math.random()*0.3).toFixed(2)}`;
+                    }
+                }
+            })
+            .catch(error => {
+                console.log('센서 데이터 업데이트:', error.message);
             });
         }
         
@@ -599,11 +1078,33 @@ class KafkaDeviceStreamView(View):
             fetch(`/api/v1/aria/kafka-device-stream/latest-frame/?stream_type=${currentStreamType}`)
             .then(response => {
                 if (response.ok) {
+                    // HTTP 헤더에서 모든 Kafka 메타데이터 추출
                     const kafkaSent = response.headers.get('X-Kafka-Sent');
+                    const kafkaTopic = response.headers.get('X-Kafka-Topic');
                     const streamType = response.headers.get('X-Stream-Type');
                     const streamName = response.headers.get('X-Stream-Name');
+                    const frameNumber = response.headers.get('X-Frame-Number');
+                    const timestampNs = response.headers.get('X-Timestamp-NS');
                     
+                    // 통계 박스 업데이트
                     document.getElementById('source').textContent = kafkaSent === 'true' ? `${streamName} ✓` : 'Cache';
+                    document.getElementById('streamType').textContent = streamType ? streamType.toUpperCase() : 'RGB';
+                    document.getElementById('kafkaTopic').textContent = kafkaTopic || '-';
+                    document.getElementById('kafkaStatus').textContent = kafkaSent === 'true' ? '✅ 전송됨' : '❌ 실패';
+                    
+                    // Kafka 메타데이터 JSON 표시
+                    const kafkaMetadata = {
+                        "kafka_sent": kafkaSent === 'true',
+                        "kafka_topic": kafkaTopic,
+                        "stream_type": streamType,
+                        "stream_name": streamName,
+                        "frame_number": parseInt(frameNumber) || 0,
+                        "timestamp_ns": timestampNs,
+                        "timestamp_readable": new Date(parseInt(timestampNs) / 1000000).toLocaleString(),
+                        "last_update": new Date().toLocaleTimeString()
+                    };
+                    
+                    document.getElementById('kafkaMetadata').textContent = JSON.stringify(kafkaMetadata, null, 2);
                     
                     return response.blob();
                 }

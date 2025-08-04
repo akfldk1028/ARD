@@ -60,6 +60,7 @@ services:
     environment:
       - DEBUG=1
       - ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0,backend
+      - DOCKER_ENV=true
       # PostgreSQL 설정
       - DB_ENGINE=django.db.backends.postgresql
       - DB_HOST=postgres

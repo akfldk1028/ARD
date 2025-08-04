@@ -76,8 +76,9 @@ urlpatterns.extend([
     path('clean-kafka/latest-frame/', clean_vrs_kafka.CleanKafkaFrameAPI.as_view(), name='clean-kafka-frame'),
     
     # Project Aria 공식 Device Stream API + Kafka 통합
-    path('kafka-device-stream/<str:action>/', kafka_device_stream.KafkaDeviceStreamControlView.as_view(), name='kafka-device-stream-control'),
+    # NOTE: 더 구체적인 패턴을 먼저 배치 (latest-frame이 <str:action>보다 먼저 매칭되어야 함)
     path('kafka-device-stream/latest-frame/', kafka_device_stream.KafkaLatestFrameView.as_view(), name='kafka-device-stream-frame'),
+    path('kafka-device-stream/<str:action>/', kafka_device_stream.KafkaDeviceStreamControlView.as_view(), name='kafka-device-stream-control'),
     
     # Image metadata and individual image viewing
     path('image-list/', views.ImageMetadataListView.as_view(), name='image-list'),
