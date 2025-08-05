@@ -16,28 +16,14 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
-from direct_image_view import DirectImageView, VRSImageView
-from aria_streams.real_time_stream_view import RealTimeStreamView
-from aria_streams.kafka_device_stream import KafkaDeviceStreamView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     
-    # 직접 이미지 보기 - 가장 간단한 방법
-    path('image/', DirectImageView.as_view(), name='direct-image'),
-    path('vrs-image/', VRSImageView.as_view(), name='vrs-image'),
+    # API v1 endpoints - 깨끗하게 정리
+    path('api/v1/aria-sessions/', include('aria_sessions.urls')),  # 통합 스트리밍 메인
+    # path('api/v1/aria/', include('aria_streams.urls')),  # 임시 비활성화
     
-    # Project Aria 공식 Device Stream API 기반 실시간 스트리밍
-    path('device-stream/', RealTimeStreamView.as_view(), name='device-stream'),
-    
-    # Project Aria 공식 Device Stream API + Kafka 통합
-    path('kafka-stream/', KafkaDeviceStreamView.as_view(), name='kafka-stream'),
-    
-    # API v1 endpoints
-    path('api/v1/aria/', include('aria_streams.urls')),
-    path('api/v1/webcam/', include('webcam_streams.urls')),
-    path('api/v1/smartwatch/', include('smartwatch_streams.urls')),
-    
-    # DRF browsable API (unified)
+    # DRF browsable API
     path('api-auth/', include('rest_framework.urls')),
 ]

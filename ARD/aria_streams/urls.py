@@ -1,7 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views
-from . import real_time_stream_view
 from . import clean_vrs_kafka
 from . import kafka_device_stream
 
@@ -66,10 +65,6 @@ urlpatterns.extend([
     # Live streaming viewer with replay control (deprecated)
     # path('live-stream/', live_stream_view.LiveStreamView.as_view(), name='live-stream'),
     
-    # Project Aria 공식 Device Stream API 기반 실시간 스트리밍
-    path('device-stream/', real_time_stream_view.RealTimeStreamView.as_view(), name='device-stream'),
-    path('device-stream/latest-frame/', real_time_stream_view.LatestFrameView.as_view(), name='latest-frame'),
-    path('device-stream/<str:action>/', real_time_stream_view.DeviceStreamControlView.as_view(), name='device-stream-control'),
     
     # 깔끔한 VRS → Kafka → API 파이프라인  
     path('clean-kafka/<str:action>/', clean_vrs_kafka.CleanKafkaStreamAPI.as_view(), name='clean-kafka-control'),
