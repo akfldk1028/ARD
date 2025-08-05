@@ -54,8 +54,25 @@ class AriaStreamingClientObserver:
             self.kafka_producer = None
             logger.warning(f"❌ Kafka Producer 초기화 실패: {e}")
         
-    def on_image_received(self, image: np.array, timestamp_ns: int, stream_type: str = 'rgb'):
-        """공식 API 콜백 - 새로운 이미지 수신 시 호출 (다중 스트림 지원)"""
+    def on_image_received(self, image: np.array, record=None):
+        """공식 Project Aria Observer 패턴 - on_image_received(image, record)"""
+        # record에서 메타데이터 추출
+        if record:
+            timestamp_ns = record.capture_timestamp_ns if hasattr(record, 'capture_timestamp_ns') else int(time.time() * 1e9)
+            stream_id = str(record.stream_id) if hasattr(record, 'stream_id') else 'unknown'
+        else:
+            timestamp_ns = int(time.time() * 1e9)
+            stream_id = 'rgb'
+        
+        # 스트림 타입 매핑
+        stream_type_map = {
+            '214-1': 'rgb',
+            '1201-1': 'slam-left', 
+            '1201-2': 'slam-right',
+            '211-1': 'eye-tracking'
+        }
+        stream_type = stream_type_map.get(stream_id, 'rgb')
+        
         try:
             self.rgb_image = image
             self.frame_count += 1
@@ -200,9 +217,11 @@ class AriaDeviceStreamSimulator:
         self.observer = observer
         
     def start_streaming(self, stream_type='rgb'):
-        """공식 API 패턴: 스트리밍 시작"""
+        """공식 API 패턴: 스트리밍 시작 - 스트림 전환 지원"""
+        # 이미 스트리밍 중이면 먼저 중지
         if self.is_streaming:
-            return
+            logger.info(f"기존 스트리밍 ({self.current_stream_type}) 중지 후 {stream_type}로 전환")
+            self.stop_streaming()
         
         # 스트림 타입 설정
         self.current_stream_type = stream_type
@@ -211,6 +230,16 @@ class AriaDeviceStreamSimulator:
         if stream_type not in self.stream_info or not self.stream_info[stream_type]['available']:
             logger.warning(f"스트림 {stream_type} 사용 불가")
             return
+        
+        # Observer 캐시 청소 - 이전 스트림의 이미지 제거
+        if self.observer:
+            # 이미지 큐 비우기
+            while not self.observer.latest_image_queue.empty():
+                try:
+                    self.observer.latest_image_queue.get_nowait()
+                except:
+                    break
+            logger.info(f"Observer 캐시 청소 완료 - {stream_type} 스트림 준비")
             
         self.is_streaming = True
         self.streaming_thread = threading.Thread(target=self._streaming_loop)
@@ -222,6 +251,16 @@ class AriaDeviceStreamSimulator:
         self.is_streaming = False
         if self.streaming_thread:
             self.streaming_thread.join()
+        
+        # Observer 캐시 청소
+        if self.observer:
+            while not self.observer.latest_image_queue.empty():
+                try:
+                    self.observer.latest_image_queue.get_nowait()
+                except:
+                    break
+            logger.info(f"Observer 캐시 청소 완료")
+        
         logger.info(f"Aria {self.current_stream_type} 스트리밍 중지")
         
     def _streaming_loop(self):
@@ -250,10 +289,10 @@ class AriaDeviceStreamSimulator:
                 
                 if image_data[0] is not None:
                     numpy_image = image_data[0].to_numpy_array()
-                    timestamp_ns = image_data[1].capture_timestamp_ns
+                    image_record = image_data[1]
                     
-                    # Observer 콜백 호출 (스트림 타입 포함)
-                    self.observer.on_image_received(numpy_image, timestamp_ns, self.current_stream_type)
+                    # 공식 Observer 패턴 호출 - on_image_received(image, record)
+                    self.observer.on_image_received(numpy_image, image_record)
                 
                 frame_idx = (frame_idx + 1) % total_frames  # 순환 재생
                 time.sleep(frame_interval)
@@ -264,9 +303,26 @@ class AriaDeviceStreamSimulator:
         
         logger.info(f"{self.current_stream_type} 스트리밍 루프 종료")
 
-# 글로벌 디바이스 시뮬레이터
-device_simulator = AriaDeviceStreamSimulator()
+# 글로벌 디바이스 시뮬레이터 - kafka_device_stream 패턴 적용
+import os
+
+# Django 프로젝트 루트에서 VRS 파일 경로 찾기
+vrs_path = None
+for possible_path in ['data/mps_samples/sample.vrs', 'ARD/data/mps_samples/sample.vrs', '../data/mps_samples/sample.vrs']:
+    if os.path.exists(possible_path):
+        vrs_path = possible_path
+        break
+
+if not vrs_path:
+    # 절대 경로 사용
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    vrs_path = os.path.join(base_dir, 'data', 'mps_samples', 'sample.vrs')
+
+print(f"🔥 Device Stream 인스턴스 생성 중... VRS 경로: {vrs_path}")
+streaming_observer = AriaStreamingClientObserver()
+device_simulator = AriaDeviceStreamSimulator(vrs_path)
 device_simulator.set_streaming_client_observer(streaming_observer)
+print("✅ Device Stream 인스턴스 생성 완료")
 
 class RealTimeStreamView(View):
     """Project Aria 공식 Device Stream API 기반 실시간 스트리밍 뷰어"""

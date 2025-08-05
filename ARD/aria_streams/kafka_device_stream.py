@@ -63,13 +63,27 @@ class AriaKafkaStreamingObserver:
         
         logger.info("✅ AriaKafkaStreamingObserver 초기화 완료 (이미지 + 센서)")
         
-    def on_image_received(self, image: np.array, timestamp_ns: int, stream_info=None):
-        """Observer 콜백 - 다중 스트림 지원"""
-        stream_info = stream_info or {'stream_type': 'rgb', 'stream_name': 'camera-rgb'}
-        stream_type = stream_info.get('stream_type', 'rgb')
-        stream_name = stream_info.get('stream_name', 'unknown')
+    def on_image_received(self, image: np.array, record=None):
+        """공식 Project Aria Observer 패턴 - on_image_received(image, record)"""
+        # record에서 메타데이터 추출
+        if record:
+            timestamp_ns = record.capture_timestamp_ns if hasattr(record, 'capture_timestamp_ns') else int(time.time() * 1e9)
+            stream_id = str(record.stream_id) if hasattr(record, 'stream_id') else 'unknown'
+        else:
+            timestamp_ns = int(time.time() * 1e9)
+            stream_id = 'rgb'
         
-        print(f"🔥 Kafka Observer 콜백! stream={stream_type}, shape={image.shape}")
+        # 스트림 타입 매핑
+        stream_type_map = {
+            '214-1': 'rgb',
+            '1201-1': 'slam-left', 
+            '1201-2': 'slam-right',
+            '211-1': 'eye-tracking'
+        }
+        stream_type = stream_type_map.get(stream_id, 'rgb')
+        stream_name = f"camera-{stream_type}"
+        
+        print(f"🔥 공식 Observer 콜백! stream={stream_type}, shape={image.shape}, id={stream_id}")
         
         try:
             self.frame_count += 1
@@ -429,14 +443,10 @@ class AriaKafkaDeviceSimulator:
                     
                     if image_data[0] is not None:
                         numpy_image = image_data[0].to_numpy_array()
-                        timestamp_ns = image_data[1].capture_timestamp_ns
+                        image_record = image_data[1]
                         
-                        # Observer 콜백 호출 (스트림 정보 포함)
-                        self.observer.on_image_received(numpy_image, timestamp_ns, {
-                            'stream_type': self.current_stream_type,
-                            'stream_name': stream_name,
-                            'frame_index': frame_idx
-                        })
+                        # 공식 Observer 패턴 호출 - on_image_received(image, record)
+                        self.observer.on_image_received(numpy_image, image_record)
                         
                 elif stream_type == 'imu':
                     # IMU 데이터 처리

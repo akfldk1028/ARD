@@ -122,6 +122,14 @@ CACHES = {
     }
 }
 
+# Kafka Configuration
+KAFKA_BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
+KAFKA_GROUP_ID = os.getenv('KAFKA_GROUP_ID', 'ard-consumer-group')
+KAFKA_AUTO_OFFSET_RESET = os.getenv('KAFKA_AUTO_OFFSET_RESET', 'latest')
+KAFKA_ENABLE_AUTO_COMMIT = os.getenv('KAFKA_ENABLE_AUTO_COMMIT', 'True').lower() == 'true'
+KAFKA_SESSION_TIMEOUT_MS = int(os.getenv('KAFKA_SESSION_TIMEOUT_MS', '30000'))
+KAFKA_HEARTBEAT_INTERVAL_MS = int(os.getenv('KAFKA_HEARTBEAT_INTERVAL_MS', '10000'))
+
 
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
