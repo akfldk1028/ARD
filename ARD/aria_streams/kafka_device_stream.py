@@ -25,6 +25,16 @@ except ImportError:
     ARIA_SDK_AVAILABLE = False
 
 from .producers import AriaKafkaProducer
+
+# 환경 자동 감지 유틸리티 import
+try:
+    from common.kafka_utils import get_kafka_server, print_environment_info
+except ImportError:
+    # Fallback: 유틸리티가 없으면 기본 동작
+    def get_kafka_server():
+        return 'localhost:9092'
+    def print_environment_info():
+        print("⚠️ kafka_utils를 찾을 수 없음 - 기본 설정 사용")
 # BinaryKafkaProducer 불필요 - JSON 메타데이터만 사용
 
 logger = logging.getLogger(__name__)
@@ -33,7 +43,7 @@ class AriaKafkaStreamingObserver:
     """
     Project Aria 공식 Observer 패턴 + Kafka Producer 통합 (전체 센서 지원)
     """
-    def __init__(self, kafka_servers='localhost:9092'):
+    def __init__(self, kafka_servers=None):
         # 이미지 캐시
         self.latest_image_queue = Queue(maxsize=1)
         self.frame_count = 0
@@ -53,13 +63,19 @@ class AriaKafkaStreamingObserver:
             'audio': 0
         }
         
-        # Kafka Producer 추가
+        # Kafka Producer 추가 (환경 자동 감지)
         try:
-            self.kafka_producer = AriaKafkaProducer(kafka_servers)
+            if kafka_servers:
+                logger.info(f"🎯 수동 설정된 Kafka 서버 사용: {kafka_servers}")
+                self.kafka_producer = AriaKafkaProducer(kafka_servers)
+            else:
+                auto_server = get_kafka_server()
+                logger.info(f"🔍 자동 감지된 Kafka 서버 사용: {auto_server}")
+                self.kafka_producer = AriaKafkaProducer(auto_server)
             logger.info("✅ Kafka Producer 초기화 성공 (전체 센서 지원)")
-        except:
+        except Exception as e:
             self.kafka_producer = None
-            logger.warning("❌ Kafka Producer 초기화 실패")
+            logger.warning(f"❌ Kafka Producer 초기화 실패: {e}")
         
         logger.info("✅ AriaKafkaStreamingObserver 초기화 완료 (이미지 + 센서)")
         

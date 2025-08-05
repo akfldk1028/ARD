@@ -50,7 +50,7 @@ services:
   # Django ARD API 서비스
   backend:
     build: .
-    image: ard-backend:v16-device-stream
+    image: ard-backend:v16-auto-detection
     container_name: ARD-BACKEND
     ports:
       - "8000:8000"

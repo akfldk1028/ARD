@@ -7,11 +7,27 @@ from typing import Dict, Any, Optional
 import logging
 from datetime import datetime
 
+# 환경 자동 감지 유틸리티 import
+try:
+    from common.kafka_utils import get_kafka_server, get_optimal_kafka_config
+except ImportError:
+    # Fallback: 유틸리티가 없으면 기본 동작
+    def get_kafka_server():
+        return os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
+    def get_optimal_kafka_config():
+        return {'bootstrap_servers': get_kafka_server()}
+
 logger = logging.getLogger(__name__)
 
 class AriaKafkaProducer:
     def __init__(self, bootstrap_servers=None):
-        self.bootstrap_servers = bootstrap_servers or os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
+        # 환경 자동 감지 또는 수동 설정
+        if bootstrap_servers:
+            self.bootstrap_servers = bootstrap_servers
+            logger.info(f"🎯 수동 설정된 Kafka 서버: {bootstrap_servers}")
+        else:
+            self.bootstrap_servers = get_kafka_server()
+            logger.info(f"🔍 자동 감지된 Kafka 서버: {self.bootstrap_servers}")
         self.producer = None
         self.topics = {
             'vrs_raw_stream': 'vrs-raw-stream',
@@ -35,29 +51,37 @@ class AriaKafkaProducer:
         }
     
     def _get_producer(self):
-        """Lazy initialization of producer"""
+        """Lazy initialization of producer with environment-optimized settings"""
         if self.producer is None:
-            self.producer = KafkaProducer(
-                bootstrap_servers=[self.bootstrap_servers],
-                value_serializer=lambda v: json.dumps(v).encode('utf-8'),
-                key_serializer=lambda k: k.encode('utf-8') if k else None,
-                # Performance optimization
-                compression_type=None,  # No compression for compatibility
-                batch_size=32768,          # 32KB batches for efficiency
-                linger_ms=5,               # Small delay for batching
-                buffer_memory=67108864,    # 64MB buffer
-                # Large message support
-                max_request_size=10485760, # 10MB max message
-                # Reliability
-                retries=3,
-                acks=1,
-                request_timeout_ms=30000,  # Increased timeout
-                metadata_max_age_ms=300000,  # 5 minutes
-                # Connection management
-                connections_max_idle_ms=300000,
-                reconnect_backoff_ms=50,
-                reconnect_backoff_max_ms=1000
-            )
+            # 환경 최적화 설정 가져오기
+            try:
+                optimal_config = get_optimal_kafka_config()
+                logger.info(f"🎯 환경 최적화 설정 사용: {optimal_config}")
+            except:
+                # Fallback to basic config
+                optimal_config = {'bootstrap_servers': self.bootstrap_servers}
+                logger.warning("⚠️ 기본 설정 사용 (환경 최적화 실패)")
+            
+            # 기본 설정과 환경 최적화 설정 병합
+            producer_config = {
+                'bootstrap_servers': [self.bootstrap_servers],
+                'value_serializer': lambda v: json.dumps(v).encode('utf-8'),
+                'key_serializer': lambda k: k.encode('utf-8') if k else None,
+                # Performance optimization (기본값)
+                'compression_type': None,
+                'linger_ms': 5,
+                'buffer_memory': 67108864,    # 64MB buffer
+                'max_request_size': 10485760, # 10MB max message
+                'retries': 3,
+                'acks': 1,
+                'metadata_max_age_ms': 300000,
+                'reconnect_backoff_max_ms': 1000,
+                # 환경별 최적화 설정 덮어쓰기
+                **{k: v for k, v in optimal_config.items() if k != 'bootstrap_servers'}
+            }
+            
+            logger.info(f"🚀 Kafka Producer 초기화: {producer_config['bootstrap_servers']}")
+            self.producer = KafkaProducer(**producer_config)
         return self.producer
     
     def send_vrs_frame(self, stream_id: str, frame_data: Dict[str, Any]):
