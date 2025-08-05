@@ -1,7 +1,26 @@
 {
   "permissions": {
     "allow": [
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(source:*)",
+      "Bash(python:*)",
+      "Bash(curl:*)",
+      "Bash(grep:*)",
+      "Bash(git fetch:*)",
+      "Bash(docker run:*)",
+      "Bash(mkdir:*)",
+      "Bash(docker create:*)",
+      "Bash(docker cp:*)",
+      "Bash(docker rm:*)",
+      "WebFetch(domain:facebookresearch.github.io)",
+      "Bash(pkill:*)",
+      "Bash(docker-compose up:*)",
+      "Bash(docker logs:*)",
+      "Bash(rm:*)",
+      "Bash(docker-compose:*)",
+      "Bash(cat:*)",
+      "Bash(telnet:*)",
+      "Bash(wget:*)"
     ],
     "deny": []
   }
