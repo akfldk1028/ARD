@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Aria Real-time Streaming Test</title>
+    <title>CACHE CLEARED v6 - Real-time 4-Camera Streaming</title>
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; }
         .controls { margin: 20px 0; }
@@ -171,24 +171,20 @@
         function startSimpleStreaming() {
             const sessionId = document.getElementById('sessionId').value;
             
-            // 세션 ID가 없어도 일반 API 사용 가능
-            if (!sessionId || sessionId === '') {
-                log('No session selected - using auto-selected session...', 'success');
-            }
-            
             if (isStreaming) {
                 log('Already streaming', 'error');
                 return;
             }
             
             isStreaming = true;
-            document.getElementById('status').textContent = 'Simultaneous streaming started';
-            log('Starting TRUE simultaneous streaming (all sensors + cameras)...', 'success');
+            currentFrameIndex = 0;  // 카운터 리셋
+            document.getElementById('status').textContent = 'Real-time Streaming Started';
+            log('Starting real-time streaming...', 'success');
             
-            // 실제 동시 스트리밍: 이미지 + 센서 데이터를 함께 스트리밍
+            // Meta 공식 메모리 캐시 패턴: 한번 로드 → 좌르르륽 스트리밍
             streamingInterval = setInterval(() => {
                 loadSimultaneousData(sessionId);
-            }, 500);  // 500ms마다 모든 데이터 타입 동시 요청
+            }, 50);  // 50ms마다 (20fps) - 메모리 캐시라서 매우 빠름
         }
         
         function handleMessage(data) {
@@ -295,27 +291,30 @@
         }
         
         function loadMultiCameraFrames(sessionId) {
-            // 순차적으로 프레임 인덱스 증가
-            currentFrameIndex = (currentFrameIndex + 1) % 123;  // 0-122 순환 (VRS 파일에 123개 프레임)
+            // 🏆 메모리 캐시에서 단일 프레임 로드 (디스크 I/O 없음)
+            log('Loading from MEMORY CACHE (no disk I/O)...', 'success');
             
-            // 4개 카메라 동시 로드
-            const cameras = ['camera-rgb', 'camera-slam-left', 'camera-slam-right', 'camera-eyetracking'];
+            const frameIdx = Math.floor(Math.random() * 123);  // 랜덤 프레임 (0-122)
+            
+            // 4개 카메라별로 메모리 캐시 API 호출
+            const cameras = ['camera-rgb', 'camera-slam-left', 'camera-slam-right', 'camera-et'];
             
             cameras.forEach(camera => {
-                fetch(`/api/v1/aria-sessions/simple/${sessionId}/streaming_frame/?frame=${currentFrameIndex}&streams=${camera}`)
+                fetch(`/api/v1/aria-sessions/memory-cached-frame/?stream=${camera}&frame=${frameIdx}`)
                 .then(response => {
                     if (response.ok) {
-                        const frameNumber = response.headers.get('X-Frame-Number');
-                        const streamType = response.headers.get('X-Stream-Type');
-                        const hasImage = response.headers.get('X-Has-Image');
+                        const frameIdx = response.headers.get('X-Frame-Idx');
+                        const streamLabel = response.headers.get('X-Stream-Label');
+                        const source = response.headers.get('X-Source');
+                        const shape = response.headers.get('X-Shape');
                         
-                        if (hasImage === 'true') {
-                            return response.blob();
-                        } else {
-                            throw new Error('No image data');
-                        }
+                        return response.blob();
+                    } else if (response.status === 400) {
+                        throw new Error('Memory cache not loaded');
+                    } else if (response.status === 204) {
+                        throw new Error('No content in cache');
                     } else {
-                        throw new Error('Failed to load frame');
+                        throw new Error(`HTTP ${response.status}`);
                     }
                 })
                 .then(blob => {
@@ -335,21 +334,21 @@
                         img.dataset.oldUrl = url;
                         
                         // 정보 업데이트
-                        info.textContent = `Frame: ${currentFrameIndex}`;
+                        info.textContent = `Memory Cache Frame ${frameIdx} (${camera})`;
                     }
                 })
                 .catch(error => {
                     const streamDiv = document.getElementById(`stream-${camera}`);
                     if (streamDiv) {
                         const info = streamDiv.querySelector('.image-info');
-                        info.textContent = `Error: ${error.message}`;
+                        info.textContent = `${error.message}`;
                     }
                 });
             });
             
             frameCount++;
-            document.getElementById('frameCount').textContent = `Frames: ${frameCount}`;
-            document.getElementById('frameInfo').innerHTML = `Multi-Camera Frame: ${currentFrameIndex}<br>Status: Streaming All`;
+            document.getElementById('frameCount').textContent = `Memory Cache Frames: ${frameCount}`;
+            document.getElementById('frameInfo').innerHTML = `Multi-Camera Memory Cache<br>Status: Fast Memory Access (No Disk I/O)`;
         }
         
         function loadLatestFrame(sessionId) {
@@ -363,8 +362,22 @@
                 streamingInterval = null;
             }
             isStreaming = false;
-            document.getElementById('status').textContent = 'Stopped';
-            log('Streaming stopped', 'success');
+            
+            // 최적화된 스트리밍 중지
+            fetch('/api/v1/aria-sessions/stop-optimized-streaming/', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    log(`🛑 Optimized streaming stopped: ${data.message}`, 'success');
+                }
+            })
+            .catch(err => log(`Failed to stop optimized streaming: ${err}`, 'error'));
+            
+            document.getElementById('status').textContent = 'OPTIMIZED Streaming Stopped';
+            log('🛑 OPTIMIZED streaming stopped', 'success');
         }
         
         function getSingleFrame() {
@@ -397,49 +410,29 @@
         }
         
         function loadSimultaneousData(sessionId) {
-            // 진짜 동시 스트리밍: 통합 API로 모든 데이터 타입을 한 번에 가져옴 (유지보수 개선)
-            currentFrameIndex = (currentFrameIndex + 1) % 100;  // 0-99 순환
+            // Meta Official Memory Cache Pattern: Load Once → Fast Streaming
             
-            // API URL 결정 (세션별 vs 일반)
-            let apiUrl;
-            if (sessionId && sessionId !== 'null' && sessionId !== '') {
-                // 세션별 API
-                apiUrl = `/api/v1/aria-sessions/simple/${sessionId}/unified_stream_realtime/?sample=${currentFrameIndex}&max_samples=20&include_images=true`;
-                log(`Using session-specific API: ${sessionId.substring(0, 8)}...`);
-            } else {
-                // 일반 API (세션 자동 선택)
-                apiUrl = `/api/v1/aria-sessions/unified-stream-realtime/?sample=${currentFrameIndex}&max_samples=20&include_images=true`;
-                log(`Using general API (auto-select session)`);
-            }
+            currentFrameIndex = (currentFrameIndex + 1) % 123;  // VRS has 123 frames
             
-            log(`Fetching simultaneous data from: ${apiUrl}`);
+            // Use working general streaming API
+            let apiUrl = `/api/v1/aria-sessions/unified-stream-realtime/?sample=${currentFrameIndex}&max_samples=1`;
             
-            // 통합 스트리밍 API 호출
+            // Call unified streaming API
             fetch(apiUrl)
             .then(response => {
-                log(`API Response status: ${response.status}`);
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                 }
                 return response.json();
             })
             .then(data => {
-                log(`API Response received:`, 'success');
-                log(`Response keys: ${Object.keys(data).join(', ')}`);
-                
                 if (data.error) {
                     throw new Error(data.error);
                 }
                 
-                // 데이터 구조 검증
-                if (!data.unified_data) {
-                    throw new Error('No unified_data in response');
-                }
-                
                 const { images = [], sensors = [] } = data.unified_data;
-                log(`Processing ${images.length} images and ${sensors.length} sensors`);
                 
-                // 이미지 데이터 처리
+                // Process image data
                 let imageProcessed = 0;
                 images.forEach((imageData, index) => {
                     try {
@@ -450,7 +443,7 @@
                     }
                 });
                 
-                // 센서 데이터 처리
+                // Process sensor data
                 let sensorProcessed = 0;
                 sensors.forEach((sensorData, index) => {
                     try {
@@ -461,30 +454,28 @@
                     }
                 });
                 
-                // 통계 업데이트
+                // Update statistics
                 frameCount++;
                 const stats = data.stats || {};
                 document.getElementById('frameCount').textContent = 
-                    `Data: ${frameCount} (Images: ${stats.image_count || 0}, Sensors: ${stats.sensor_count || 0})`;
+                    `Memory Cache: ${frameCount} (Images: ${stats.image_count || 0}, Sensors: ${stats.sensor_count || 0})`;
                 document.getElementById('frameInfo').innerHTML = `
-                    Unified Stream Sample: ${currentFrameIndex}<br>
-                    Status: Simultaneous ALL sensors + cameras<br>
-                    Total Items: ${stats.total_items || 0}<br>
+                    Memory Cache Frame: ${currentFrameIndex}<br>
+                    Status: Fast Memory Access (No Disk I/O)<br>
+                    Cache Hits: ${stats.cache_hits || 0}<br>
                     Processed: ${imageProcessed} images, ${sensorProcessed} sensors<br>
-                    Session: ${data.session_id ? data.session_id.substring(0, 8) + '...' : 'unknown'}
+                    Method: ${data.method || 'memory_cache'}
                 `;
-                
-                log(`SUCCESS: Processed ${imageProcessed}/${images.length} images, ${sensorProcessed}/${sensors.length} sensors`, 'success');
                 
             })
             .catch(error => {
-                log(`Simultaneous streaming error: ${error.message}`, 'error');
+                log(`Memory cache streaming error: ${error.message}`, 'error');
                 
-                // 에러시에도 정보 업데이트
+                // Update info even on error
                 document.getElementById('frameInfo').innerHTML = `
-                    Error at sample ${currentFrameIndex}<br>
+                    Error at frame ${currentFrameIndex}<br>
                     Status: ERROR - ${error.message}<br>
-                    Check console for details
+                    Suggestion: Check if memory cache is preloaded
                 `;
             });
         }
@@ -538,10 +529,10 @@
                     log(`SUCCESS: Loaded image for ${imageData.stream_label} (${imageData.image_shape})`, 'success');
                 };
                 
-                // 정보 업데이트
-                const timestamp = new Date(imageData.device_timestamp_ns / 1000000).toLocaleTimeString();
-                const shape = imageData.image_shape ? `${imageData.image_shape.join('x')}` : 'unknown';
-                info.textContent = `${shape} | Seq: ${imageData.sequence} | ${timestamp}`;
+                // 정보 업데이트 (Memory Cache)
+                const timestamp = new Date(imageData.timestamp_ns / 1000000).toLocaleTimeString();
+                const shape = imageData.shape ? `${imageData.shape.join('x')}` : 'unknown';
+                info.textContent = `${shape} | Frame: ${imageData.frame_idx} | ${timestamp} | Source: ${imageData.data_source}`;
                 
             } catch (error) {
                 log(`ERROR: Exception in updateImageDisplay for ${imageData.stream_label}: ${error}`, 'error');
@@ -652,26 +643,19 @@
         }
         
         function loadSensorData(sessionId, sensorType) {
-            // 개별 센서 스트리밍 (버튼용) - 실제 VRS 데이터 사용
-            log(`Loading real sensor data for ${sensorType}...`, 'success');
+            // Memory Cache 센서 스트리밍 (버튼용)
+            log(`Loading sensor data from MEMORY CACHE for ${sensorType}...`, 'success');
             
             if (window.sensorInterval) {
                 clearInterval(window.sensorInterval);
             }
             
-            let sampleIndex = 0;
+            let sensorIndex = 0;
             window.sensorInterval = setInterval(() => {
-                // API URL 결정 (세션별 vs 일반)
-                let apiUrl;
-                if (sessionId && sessionId !== 'null') {
-                    // 세션별 API
-                    apiUrl = `/api/v1/aria-sessions/simple/${sessionId}/streaming_sensor/?sensors=${sensorType}&sample=${sampleIndex}&max_samples=5`;
-                } else {
-                    // 일반 API (세션 자동 선택)
-                    apiUrl = `/api/v1/aria-sessions/streaming-sensor/?sensors=${sensorType}&sample=${sampleIndex}&max_samples=5`;
-                }
+                // Memory Cache 센서 API 사용 (디스크 I/O 없음)
+                let apiUrl = `/api/v1/aria-sessions/memory-cached-sensors/?sensors=${sensorType}&sensor=${sensorIndex}`;
                 
-                // 센서별 API 호출
+                // 센서별 메모리 캐시 API 호출
                 fetch(apiUrl)
                 .then(response => response.json())
                 .then(data => {
@@ -683,15 +667,16 @@
                         // 최신 센서 데이터 표시
                         const latestSensor = data.sensor_data[data.sensor_data.length - 1];
                         updateSensorDisplay(latestSensor);
+                        log(`Memory Cache Sensor ${sensorType}: index ${sensorIndex}`, 'success');
                     }
                     
-                    sampleIndex = (sampleIndex + 5) % 1000;  // 다음 샘플로 이동
+                    sensorIndex = (sensorIndex + 1) % 100;  // 센서 인덱스 순환
                 })
                 .catch(error => {
-                    log(`Sensor ${sensorType} error: ${error.message}`, 'error');
+                    log(`Memory Cache Sensor ${sensorType} error: ${error.message}`, 'error');
                 });
                 
-            }, 1000);  // 1초마다 센서 데이터 업데이트
+            }, 200);  // 200ms마다 센서 데이터 업데이트 (5fps) - 메모리라서 빠름
         }
         
         // 세션 목록 로드

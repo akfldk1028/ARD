@@ -24,6 +24,9 @@ urlpatterns = [
     path('api/v1/aria-sessions/', include('aria_sessions.urls')),  # 통합 스트리밍 메인
     # path('api/v1/aria/', include('aria_streams.urls')),  # 임시 비활성화
     
+    # API v2 endpoints - Kafka 스트리밍 시스템
+    # path('', include('aria_kafka.urls')),  # 새로운 Kafka API (임시 비활성화)
+    
     # DRF browsable API
     path('api-auth/', include('rest_framework.urls')),
 ]

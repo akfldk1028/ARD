@@ -6,7 +6,7 @@ import base64
 
 def streaming_test_page(request):
     """일반 스트리밍 테스트 페이지 (세션 ID 없이 접근)"""
-    return render(request, 'aria_sessions/streaming_test.html', {
+    return render(request, 'aria_sessions/streaming_test_v6.html', {
         'session_id': None  # 자동으로 세션 목록을 로드함
     })
 
