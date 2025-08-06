@@ -53,8 +53,8 @@ class ConcurrentSensorObserver:
         # 센서 매핑은 동적으로 생성됨
         self.sensor_mappings = {}
         
-        # 기본 센서들 Queue 초기화
-        basic_sensors = ['imu_left', 'imu_right', 'magnetometer', 'barometer', 'audio']
+        # 기본 센서들 Queue 초기화 (새로운 VRS 파일 기반)
+        basic_sensors = ['imu_left', 'imu_right', 'magnetometer', 'barometer', 'audio', 'gps', 'wifi', 'bluetooth']
         for sensor_type in basic_sensors:
             self.sensor_queues[sensor_type] = Queue(maxsize=10)  # 센서는 더 많은 데이터
             self.sensor_counts[sensor_type] = 0
@@ -252,8 +252,8 @@ class ConcurrentSensorStreaming:
             print(f"❌ 자력계 활성화 실패: {e}")
             
         try:
-            # 기압계 (RecordableTypeId로 검색)
-            baro_stream_ids = options.get_stream_ids(RecordableTypeId.BAROMETER_DATA)
+            # 기압계 (정확한 RecordableTypeId 사용)
+            baro_stream_ids = options.get_stream_ids(RecordableTypeId.BAROMETER_RECORDABLE_CLASS)
             print(f"✅ 기압계 스트림 발견: {len(baro_stream_ids)}개")
             for stream_id in baro_stream_ids:
                 options.activate_stream(stream_id)
@@ -263,8 +263,8 @@ class ConcurrentSensorStreaming:
             print(f"❌ 기압계 활성화 실패: {e}")
             
         try:
-            # 오디오 (RecordableTypeId로 검색)
-            audio_stream_ids = options.get_stream_ids(RecordableTypeId.AUDIO_DATA)
+            # 오디오 (정확한 RecordableTypeId 사용)
+            audio_stream_ids = options.get_stream_ids(RecordableTypeId.STEREO_AUDIO_RECORDABLE_CLASS)
             print(f"✅ 오디오 스트림 발견: {len(audio_stream_ids)}개")
             for stream_id in audio_stream_ids:
                 options.activate_stream(stream_id)
@@ -272,6 +272,39 @@ class ConcurrentSensorStreaming:
                 print(f"✅ 오디오 {stream_id} 활성화")
         except Exception as e:
             print(f"❌ 오디오 활성화 실패: {e}")
+        
+        try:
+            # 🌍 GPS (새로 추가!)
+            gps_stream_ids = options.get_stream_ids(RecordableTypeId.GPS_RECORDABLE_CLASS)
+            print(f"✅ GPS 스트림 발견: {len(gps_stream_ids)}개")
+            for stream_id in gps_stream_ids:
+                options.activate_stream(stream_id)
+                options.set_subsample_rate(stream_id, 1)  # GPS는 느리므로 모든 데이터
+                print(f"✅ GPS {stream_id} 활성화")
+        except Exception as e:
+            print(f"❌ GPS 활성화 실패: {e}")
+        
+        try:
+            # 📶 WiFi Beacon (새로 추가!)
+            wifi_stream_ids = options.get_stream_ids(RecordableTypeId.WIFI_BEACON_RECORDABLE_CLASS)
+            print(f"✅ WiFi Beacon 스트림 발견: {len(wifi_stream_ids)}개")
+            for stream_id in wifi_stream_ids:
+                options.activate_stream(stream_id)
+                options.set_subsample_rate(stream_id, 5)  # WiFi는 적당한 샘플링
+                print(f"✅ WiFi {stream_id} 활성화")
+        except Exception as e:
+            print(f"❌ WiFi 활성화 실패: {e}")
+        
+        try:
+            # 📱 Bluetooth Beacon (새로 추가!)
+            bluetooth_stream_ids = options.get_stream_ids(RecordableTypeId.BLUETOOTH_BEACON_RECORDABLE_CLASS)
+            print(f"✅ Bluetooth Beacon 스트림 발견: {len(bluetooth_stream_ids)}개")
+            for stream_id in bluetooth_stream_ids:
+                options.activate_stream(stream_id)
+                options.set_subsample_rate(stream_id, 3)  # Bluetooth는 적당한 샘플링
+                print(f"✅ Bluetooth {stream_id} 활성화")
+        except Exception as e:
+            print(f"❌ Bluetooth 활성화 실패: {e}")
         
         return options
     
@@ -335,6 +368,12 @@ class ConcurrentSensorStreaming:
                             stream_to_sensor[str(stream_id)] = ('barometer', {'name': 'barometer', 'type': 'barometer'})
                         elif 'mic' in label.lower() or 'audio' in label.lower():
                             stream_to_sensor[str(stream_id)] = ('audio', {'name': 'audio', 'type': 'audio'})
+                        elif 'gps' in label.lower():
+                            stream_to_sensor[str(stream_id)] = ('gps', {'name': 'gps', 'type': 'gps'})
+                        elif 'wps' in label.lower() or 'wifi' in label.lower():
+                            stream_to_sensor[str(stream_id)] = ('wifi', {'name': 'wifi', 'type': 'wifi'}) 
+                        elif 'bluetooth' in label.lower():
+                            stream_to_sensor[str(stream_id)] = ('bluetooth', {'name': 'bluetooth', 'type': 'bluetooth'})
                     except Exception as e:
                         print(f"❌ 스트림 {stream_id} 처리 실패: {e}")
                 
@@ -372,6 +411,39 @@ class ConcurrentSensorStreaming:
                             elif sensor_type_str == 'SensorDataType.AUDIO':
                                 audio_data, record = sensor_data.audio_data_and_record()
                                 self.observer.on_sensor_data_received(sensor_type, audio_data, timestamp_ns, sensor_config)
+                            
+                            elif sensor_type == 'gps':
+                                # GPS 데이터 처리 (새로 추가!)
+                                try:
+                                    if hasattr(sensor_data, 'get_gps_data'):
+                                        gps_data = sensor_data.get_gps_data()
+                                    else:
+                                        gps_data = sensor_data  # 직접 GPS 데이터인 경우
+                                    self.observer.on_sensor_data_received(sensor_type, gps_data, timestamp_ns, sensor_config)
+                                except Exception as e:
+                                    print(f"⚠️  GPS 데이터 처리 오류: {e}")
+                            
+                            elif sensor_type == 'wifi':
+                                # WiFi Beacon 데이터 처리 (새로 추가!)
+                                try:
+                                    if hasattr(sensor_data, 'get_wifi_beacon_data'):
+                                        wifi_data = sensor_data.get_wifi_beacon_data()
+                                    else:
+                                        wifi_data = sensor_data  # 직접 WiFi 데이터인 경우
+                                    self.observer.on_sensor_data_received(sensor_type, wifi_data, timestamp_ns, sensor_config)
+                                except Exception as e:
+                                    print(f"⚠️  WiFi 데이터 처리 오류: {e}")
+                            
+                            elif sensor_type == 'bluetooth':
+                                # Bluetooth Beacon 데이터 처리 (새로 추가!)
+                                try:
+                                    if hasattr(sensor_data, 'get_bluetooth_beacon_data'):
+                                        bluetooth_data = sensor_data.get_bluetooth_beacon_data()
+                                    else:
+                                        bluetooth_data = sensor_data  # 직접 Bluetooth 데이터인 경우
+                                    self.observer.on_sensor_data_received(sensor_type, bluetooth_data, timestamp_ns, sensor_config)
+                                except Exception as e:
+                                    print(f"⚠️  Bluetooth 데이터 처리 오류: {e}")
                             
                             sensor_count_in_cycle += 1
                             
@@ -532,6 +604,11 @@ class ConcurrentSensorPageView(View):
             backdrop-filter: blur(10px);
         }
         
+        .new-sensor {
+            background: linear-gradient(135deg, rgba(255,107,107,0.2), rgba(116,185,255,0.2));
+            border: 1px solid rgba(255,107,107,0.3);
+        }
+        
         .sensor-title {
             text-align: center;
             font-size: 1.2rem;
@@ -633,6 +710,21 @@ class ConcurrentSensorPageView(View):
             <div class="sensor-box">
                 <div class="sensor-title">🎵 오디오</div>
                 <div class="sensor-data" id="audio-data">대기 중...</div>
+            </div>
+            
+            <div class="sensor-box new-sensor">
+                <div class="sensor-title">🌍 GPS</div>
+                <div class="sensor-data" id="gps-data">대기 중...</div>
+            </div>
+            
+            <div class="sensor-box new-sensor">
+                <div class="sensor-title">📶 WiFi Beacon</div>
+                <div class="sensor-data" id="wifi-data">대기 중...</div>
+            </div>
+            
+            <div class="sensor-box new-sensor">
+                <div class="sensor-title">📱 Bluetooth</div>
+                <div class="sensor-data" id="bluetooth-data">대기 중...</div>
             </div>
         </div>
         
@@ -742,6 +834,12 @@ class ConcurrentSensorPageView(View):
                 element = document.getElementById('barometer-data');
             } else if (sensorType === 'audio') {
                 element = document.getElementById('audio-data');
+            } else if (sensorType === 'gps') {
+                element = document.getElementById('gps-data');
+            } else if (sensorType === 'wifi') {
+                element = document.getElementById('wifi-data');
+            } else if (sensorType === 'bluetooth') {
+                element = document.getElementById('bluetooth-data');
             }
             
             console.log(`🎯 Element found: ${element ? 'YES' : 'NO'}, SensorData: ${sensorData ? 'YES' : 'NO'}`);
@@ -781,6 +879,27 @@ Frame: ${sensorData.frame_number}`;
 샘플: ${audio.total_samples}
 채널: ${audio.channels}
 샘플레이트: ${audio.sample_rate} Hz
+Frame: ${sensorData.frame_number}`;
+            } else if (sensorType === 'gps') {
+                displayText = `🌍 GPS 데이터
+위도: ${data.latitude || 'N/A'}
+경도: ${data.longitude || 'N/A'}
+고도: ${data.altitude || 'N/A'}
+정확도: ${data.accuracy || 'N/A'}
+Frame: ${sensorData.frame_number}`;
+            } else if (sensorType === 'wifi') {
+                displayText = `📶 WiFi Beacon
+SSID: ${data.ssid || 'N/A'}
+MAC: ${data.mac_address || 'N/A'}
+신호강도: ${data.rssi || 'N/A'} dBm
+주파수: ${data.frequency || 'N/A'} MHz
+Frame: ${sensorData.frame_number}`;
+            } else if (sensorType === 'bluetooth') {
+                displayText = `📱 Bluetooth
+이름: ${data.name || 'Unknown'}
+MAC: ${data.mac_address || 'N/A'}
+신호강도: ${data.rssi || 'N/A'} dBm
+타입: ${data.device_type || 'N/A'}
 Frame: ${sensorData.frame_number}`;
             }
             
