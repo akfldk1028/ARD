@@ -25,7 +25,7 @@ try:
 except ImportError:
     ARIA_SDK_AVAILABLE = False
 
-from .models import AriaStreamingSession
+from aria_sessions.models import AriaStreamingSession
 
 logger = logging.getLogger(__name__)
 
