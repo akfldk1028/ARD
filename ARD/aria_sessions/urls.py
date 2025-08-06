@@ -14,6 +14,12 @@ from .simple_fast_api import simple_fast_unified_stream
 from .optimized_streaming import start_optimized_streaming, stop_optimized_streaming, optimized_unified_stream, optimized_single_frame
 from .memory_cached_streaming import preload_vrs_to_memory, memory_cached_unified_stream, memory_cached_single_frame, memory_cache_status, memory_cached_sensor_stream, reset_memory_cache_api
 from .simple_memory_cache import load_simple_cache, simple_cache_stream, simple_cache_frame
+from .concurrent_streaming_views import (
+    ConcurrentStreamingControlView,
+    ConcurrentLatestFrameView, 
+    ConcurrentMultiFrameView,
+    ConcurrentStreamingPageView
+)
 
 # 원래 복잡한 router (문제 있음)
 router = DefaultRouter()
@@ -66,6 +72,12 @@ urlpatterns = [
     path('load-simple-cache/', load_simple_cache, name='load_simple_cache'),
     path('simple-cache-stream/', simple_cache_stream, name='simple_cache_stream'),
     path('simple-cache-frame/', simple_cache_frame, name='simple_cache_frame'),
+    
+    # 🔥 동시 4카메라 스트리밍 (공식 Observer 패턴)
+    path('concurrent-streaming/<str:action>/', ConcurrentStreamingControlView.as_view(), name='concurrent_streaming_control'),
+    path('concurrent-latest-frame/', ConcurrentLatestFrameView.as_view(), name='concurrent_latest_frame'),
+    path('concurrent-multi-frames/', ConcurrentMultiFrameView.as_view(), name='concurrent_multi_frames'),
+    path('concurrent-streaming-page/', ConcurrentStreamingPageView.as_view(), name='concurrent_streaming_page'),
     
     # 기존 스트리밍 API (디스크 기반 - 호환성용)
     path('streaming-sensor/', general_streaming_sensor, name='general_streaming_sensor'),  # 센서 데이터 API
