@@ -20,12 +20,11 @@ from django.urls import path, include
 urlpatterns = [
     path('admin/', admin.site.urls),
     
-    # API v1 endpoints - 깨끗하게 정리
+    # API v1 endpoints
     path('api/v1/aria-sessions/', include('aria_sessions.urls')),  # 통합 스트리밍 메인
-    # path('api/v1/aria/', include('aria_streams.urls')),  # 임시 비활성화
     
-    # API v2 endpoints - Kafka 스트리밍 시스템
-    # path('', include('aria_kafka.urls')),  # 새로운 Kafka API (임시 비활성화)
+    # Universal XR Devices - 다중 기기 지원 시스템 🚀
+    path('api/xr-devices/', include('xr_devices.urls')),  # 통합 XR 기기 관리 (devices, aria_kafka 대체)
     
     # DRF browsable API
     path('api-auth/', include('rest_framework.urls')),

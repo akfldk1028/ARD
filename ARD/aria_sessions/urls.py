@@ -19,6 +19,7 @@ from .working_streaming.concurrent_sensor_streaming import (
 )
 from .working_streaming.main_dashboard import MainDashboardView
 
+
 # Main router for core ViewSets
 router = DefaultRouter()
 router.register(r'sessions', views.AriaStreamingSessionViewSet)
@@ -26,6 +27,9 @@ router.register(r'sessions', views.AriaStreamingSessionViewSet)
 urlpatterns = [
     # Test endpoint
     path('test/', views.test_view, name='test'),
+    
+    # Simple test page
+    path('server-test/', lambda request: __import__('aria_sessions.working_streaming.simple_test_page', fromlist=['SimpleTestPageView']).SimpleTestPageView.as_view()(request), name='server_test'),
     
     # 🏆 메인 대시보드 (통합 페이지)
     path('main-dashboard/', MainDashboardView.as_view(), name='main_dashboard'),

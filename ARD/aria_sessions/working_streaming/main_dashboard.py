@@ -226,41 +226,7 @@ class MainDashboardView(View):
                 </a>
             </div>
         </div>
-        
-        <div class="stats-section">
-            <div class="stats-title">🏆 기술 사양</div>
-            <div class="tech-specs">
-                <div class="tech-item">
-                    <div class="tech-label">개발 패턴</div>
-                    <div class="tech-value">Project Aria 공식 Observer</div>
-                </div>
-                <div class="tech-item">
-                    <div class="tech-label">데이터 소스</div>
-                    <div class="tech-value">deliver_queued_sensor_data</div>
-                </div>
-                <div class="tech-item">
-                    <div class="tech-label">성능 향상</div>
-                    <div class="tech-value">10-100배 빠름</div>
-                </div>
-                <div class="tech-item">
-                    <div class="tech-label">동시 처리</div>
-                    <div class="tech-value">9개 스트림 (카메라4+센서5)</div>
-                </div>
-                <div class="tech-item">
-                    <div class="tech-label">순환 재생</div>
-                    <div class="tech-value">무한 루프 지원</div>
-                </div>
-                <div class="tech-item">
-                    <div class="tech-label">샘플 데이터</div>
-                    <div class="tech-value">자동 인식/로드</div>
-                </div>
-            </div>
-        </div>
-        
-        <div class="footer">
-            <p>🔥 Facebook Research 공식 projectaria_tools 기반 구현</p>
-            <p>✨ 단 한 번의 클릭으로 모든 기능 활성화</p>
-        </div>
+ 
     </div>
 
     <script>

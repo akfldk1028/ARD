@@ -52,7 +52,7 @@ class ConcurrentAriaObserver:
             self.image_queues[camera_type] = Queue(maxsize=2)
             self.frame_counts[camera_type] = 0
         
-        print("✅ ConcurrentAriaObserver 초기화 - 4카메라 동시 지원")
+        print("ConcurrentAriaObserver 초기화 - 4카메라 동시 지원")
     
     def on_image_received(self, image: np.array, record, camera_type: str):
         """
@@ -126,7 +126,7 @@ class ConcurrentAriaStreaming:
             self.provider = data_provider.create_vrs_data_provider(vrs_file_path)
             if not self.provider:
                 raise Exception("Invalid VRS data provider")
-            print(f"✅ VRS 프로바이더 생성: {vrs_file_path}")
+            print(f"VRS 프로바이더 생성: {vrs_file_path}")
         except Exception as e:
             logger.error(f"VRS 초기화 실패: {e}")
             raise
@@ -151,7 +151,7 @@ class ConcurrentAriaStreaming:
                 stream_id = config['stream_id']
                 options.activate_stream(stream_id)
                 options.set_subsample_rate(stream_id, 3)  # 성능 향상: 3프레임마다 1개씩
-                print(f"✅ {camera_type} ({stream_id}) 활성화")
+                print(f"{camera_type} ({stream_id}) 활성화")
             except Exception as e:
                 print(f"❌ {camera_type} 활성화 실패: {e}")
         
@@ -167,7 +167,7 @@ class ConcurrentAriaStreaming:
         self.streaming_thread.daemon = True
         self.streaming_thread.start()
         
-        print("🚀 동시 4카메라 스트리밍 시작")
+        print("동시 4카메라 스트리밍 시작")
         return "동시 4카메라 스트리밍 시작됨"
     
     def stop_streaming(self):

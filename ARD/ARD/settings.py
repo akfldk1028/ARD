@@ -47,7 +47,7 @@ INSTALLED_APPS = [
 
     # Local apps
     'aria_sessions',
-    'devices',
+    # 'devices',  # Removed - replaced by xr_devices
     'aria_streams',
     'webcam_streams',
     'smartwatch_streams',
@@ -55,6 +55,8 @@ INSTALLED_APPS = [
     'storage',
     'analytics',
     'datasets',
+    'xr_devices',  # 새로운 Universal XR Devices app (devices 앱 대체)
+    # 'aria_kafka',  # Removed - integrated into xr_devices
     # 'vision', # Removed - AI processing disabled
 
 
